@@ -1,3 +1,6 @@
 [submodule "thirdparty/roar"]
 	path = thirdparty/roar
 	url = https://github.com/abbaswasim/roar.git
+[submodule "thirdparty/vulkan"]
+	path = thirdparty/vulkan
+	url = https://github.com/KhronosGroup/Vulkan-Headers
