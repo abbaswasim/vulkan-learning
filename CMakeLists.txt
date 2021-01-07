@@ -41,6 +41,35 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 add_subdirectory(${VULKANED_ROOT_DIR}/thirdparty)
 add_subdirectory(${VULKANED_SOURCE_DIR})
 
+
+set(VULKANED_HEADERS
+  ${VULKANED_SOURCE_DIR}/dummy.hpp)
+
+set(VULKANED_SOURCES
+  ${VULKANED_SOURCE_DIR}/main.cpp)
+
+add_executable(${VULKANED_NAME} ${VULKANED_SOURCES} ${VULKANED_HEADERS})
+set_target_properties(${VULKANED_NAME} PROPERTIES VERSION 1.0.0.0 SOVERSION 1)          # TODO: Fix the hardcoded version
+set_target_properties(${VULKANED_NAME} PROPERTIES CMAKE_VISIBILITY_INLINES_HIDDEN true) # Don't export all of those C++ template generated symbols
+set_target_properties(${VULKANED_NAME} PROPERTIES CMAKE_CXX_VISIBILITY_PRESET hidden)   # Set default to hide symbols visibility for Roar
+set_target_properties(${VULKANED_NAME} PROPERTIES CMAKE_C_VISIBILITY_PRESET hidden)     # Set default to hide symbols visibility for Roar
+
+set(CMAKE_VISIBILITY_INLINES_HIDDEN YES)
+set(CMAKE_CXX_VISIBILITY_PRESET hidden)    # Set default to hide symbols visibility for all targets
+set(CMAKE_C_VISIBILITY_PRESET hidden)      # Set default to hide symbols visibility for all targets
+
+target_include_directories(${VULKANED_NAME} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
+target_include_directories(${VULKANED_NAME} PRIVATE ${VULKANED_SOURCE_DIR})
+target_include_directories(${VULKANED_NAME} PRIVATE ${VULKANED_ROOT_DIR})
+
+set(VULKANED_REQUIRED_LIBRARIES
+  vulkan
+  roar)
+
+target_link_libraries(${VULKANED_NAME} PRIVATE ${VULKANED_REQUIRED_LIBRARIES})
+
+build_options(${VULKANED_NAME}) # Set common build options
+
 # add_custom_command(
   # TARGET ${VULKANED_NAME} POST_BUILD
   # COMMENT "Copying compile_commands.json to root of the target so that ycmd can see it"
