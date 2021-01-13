@@ -26,9 +26,12 @@
 # Add roar library
 add_subdirectory(roar)
 
-add_library(vulkan INTERFACE)
-set(VULKAN_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/include)
-target_sources(vulkan INTERFACE ${VULKAN_INCLUDE_DIR}/vulkan/vulkan.h)
-target_include_directories(vulkan INTERFACE ${VULKAN_INCLUDE_DIR})
+# Add glfw
+add_subdirectory(glfw)
 
-target_compile_definitions(vulkan INTERFACE VK_NO_PROTOTYPES)
+add_library(vulkan_headers INTERFACE)
+set(VULKAN_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/include)
+target_sources(vulkan_headers INTERFACE ${VULKAN_INCLUDE_DIR}/vulkan/vulkan.h)
+target_include_directories(vulkan_headers INTERFACE ${VULKAN_INCLUDE_DIR})
+
+target_compile_definitions(vulkan_headers INTERFACE VK_NO_PROTOTYPES)

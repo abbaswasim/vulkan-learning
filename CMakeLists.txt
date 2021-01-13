@@ -62,8 +62,12 @@ target_include_directories(${VULKANED_NAME} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}"
 target_include_directories(${VULKANED_NAME} PRIVATE ${VULKANED_SOURCE_DIR})
 target_include_directories(${VULKANED_NAME} PRIVATE ${VULKANED_ROOT_DIR})
 
+find_package(vulkan)
+
 set(VULKANED_REQUIRED_LIBRARIES
-  vulkan
+  vulkan_headers
+  Vulkan::Vulkan
+  glfw
   roar)
 
 target_link_libraries(${VULKANED_NAME} PRIVATE ${VULKANED_REQUIRED_LIBRARIES})
