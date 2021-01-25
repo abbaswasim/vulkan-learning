@@ -30,6 +30,15 @@ list(APPEND CMAKE_MESSAGE_CONTEXT Vulkaned_Engine)
 
 set(VULKANED_NAME VulkanEd)
 
+if (USE_VOLK_INSTEAD)
+  set(VULKANED_SYMBOLS_SOURCE_DIR /development/volk)
+  set(VULKANED_SYMBOLS_SOURCE_FILE ${VULKANED_SYMBOLS_SOURCE_DIR}/volk.c)
+else()
+  set(VULKANED_SYMBOLS_SOURCE_DIR /personal/vasym/sym_gen)
+  set(VULKANED_SYMBOLS_SOURCE_FILE ${VULKANED_SYMBOLS_SOURCE_DIR}/vk_symbols_generated.cpp)
+endif()
+
+
 set(VULKANED_ROOT_DIR ${CMAKE_CURRENT_LIST_DIR}) # Always prefer the _LIST_ version FILES/DIRS instead of the _SOURCE_
 set(VULKANED_SOURCE_DIR ${VULKANED_ROOT_DIR}/src)
 
@@ -46,6 +55,7 @@ set(VULKANED_HEADERS
   ${VULKANED_SOURCE_DIR}/dummy.hpp)
 
 set(VULKANED_SOURCES
+  ${VULKANED_SYMBOLS_SOURCE_FILE}
   ${VULKANED_SOURCE_DIR}/main.cpp)
 
 add_executable(${VULKANED_NAME} ${VULKANED_SOURCES} ${VULKANED_HEADERS})
@@ -61,13 +71,15 @@ set(CMAKE_C_VISIBILITY_PRESET hidden)      # Set default to hide symbols visibil
 target_include_directories(${VULKANED_NAME} PUBLIC "${CMAKE_CURRENT_BINARY_DIR}")
 target_include_directories(${VULKANED_NAME} PRIVATE ${VULKANED_SOURCE_DIR})
 target_include_directories(${VULKANED_NAME} PRIVATE ${VULKANED_ROOT_DIR})
+target_include_directories(${VULKANED_NAME} PUBLIC ${VULKANED_SYMBOLS_SOURCE_DIR})
 
-find_package(vulkan)
+find_package(Vulkan) # Has to be Vulkan not vulkan (CMAKE seems to case sensitive for this on Linux)
 
 set(VULKANED_REQUIRED_LIBRARIES
   vulkan_headers
   Vulkan::Vulkan
   glfw
+  dl
   roar)
 
 target_link_libraries(${VULKANED_NAME} PRIVATE ${VULKANED_REQUIRED_LIBRARIES})

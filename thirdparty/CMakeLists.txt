@@ -34,4 +34,4 @@ set(VULKAN_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/include)
 target_sources(vulkan_headers INTERFACE ${VULKAN_INCLUDE_DIR}/vulkan/vulkan.h)
 target_include_directories(vulkan_headers INTERFACE ${VULKAN_INCLUDE_DIR})
 
-target_compile_definitions(vulkan_headers INTERFACE VK_NO_PROTOTYPES)
+# target_compile_definitions(vulkan_headers INTERFACE VK_NO_PROTOTYPES) // TODO: Make this work later

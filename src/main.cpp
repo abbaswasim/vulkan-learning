@@ -116,7 +116,8 @@ class VulkanApplication
   private:
 	void init()
 	{
-		glfwInit();
+		if (!glfwInit())
+			exit(EXIT_FAILURE);
 
 		glfwWindowHint(GLFW_DEPTH_BITS, 16);
 		glfwWindowHint(GLFW_SAMPLES, 4);
@@ -126,18 +127,20 @@ class VulkanApplication
 
 		this->m_window = glfwCreateWindow(1024, 900, "Vulkan Application", nullptr, nullptr);
 
+		if (!this->m_window)
+		{
+			glfwTerminate();
+			printf("GLFW Windows can't be created\n");
+			exit(EXIT_FAILURE);
+		}
+
 		glfwMakeContextCurrent(this->m_window);
 		glfwSwapInterval(0);
 
 		glfwSetKeyCallback(this->m_window, key);
 		glfwSetWindowSizeCallback(this->m_window, resize);
 
-		this->m_context = new vkd::Context();
-
-		uint32_t extensionCount = 0;
-		vkEnumerateInstanceExtensionProperties(nullptr, &extensionCount, nullptr);
-
-		std::cout << extensionCount << " extensions supported\n";
+		this->m_context = new vkd::Context(this->m_window);
 	}
 
 	void loop()
@@ -156,7 +159,7 @@ class VulkanApplication
 		glfwTerminate();
 	}
 
-	GLFWwindow *m_window{nullptr};
+	GLFWwindow *  m_window{nullptr};
 	vkd::Context *m_context{nullptr};
 };
 
