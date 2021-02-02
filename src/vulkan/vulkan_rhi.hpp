@@ -58,6 +58,7 @@
 // MSVC ENABLE/DISABLE WARNING DEFINITION
 #	define VKBP_DISABLE_WARNINGS() \
 		__pragma(warning(push, 0))
+
 #	define VKBP_ENABLE_WARNINGS() \
 		__pragma(warning(pop))
 #endif
@@ -76,7 +77,7 @@
 #	define VK_ENABLE_BETA_EXTENSIONS
 #	include "volk.h"
 #else
-#	include "vk_symbols_generated.hpp"
+#	include "vusym.hpp"
 #endif
 
 // #define GLFW_INCLUDE_VULKAN // Not required if vulkan.h included before this
@@ -144,12 +145,14 @@ FORCE_INLINE std::vector<const char *> get_instance_layers_requested()
 FORCE_INLINE std::vector<const char *> get_device_extensions_requested()
 {
 	return std::vector<const char *>{
+		VK_KHR_SWAPCHAIN_EXTENSION_NAME,                // VK_KHR_swapchain
 		VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME        // "VK_KHR_portability_subset"
 	};
 }
 
 FORCE_INLINE std::vector<const char *> get_device_layers_requested()
 {
+	// Device layers are now deprecated, this always return empty. Not backward compatible
 	return std::vector<const char *>{};
 }
 
@@ -179,48 +182,6 @@ FORCE_INLINE _type_to static_cast_safe(_type_from a_value)
 
 namespace vkd
 {
-// struct PFN_Table
-// {
-//	PFN_Table()
-//	{}
-//	PFN_Table(VkDevice this->m_device) :
-//		real_device(this->m_device)
-//	{
-//		// Do the thing here, populate the table
-//		// load_device_function();
-//	}
-
-//	VkDevice             real_device;
-//	PFN_vkAllocateMemory vkAllocateMemory    = nullptr;
-//	PFN_vkCreateDevice   vkCreateDevice_real = nullptr;
-// };
-
-// static std::unordered_map<VkDevice *, PFN_Table> table;
-
-// VKAPI_ATTR VkResult VKAPI_CALL vkAllocateMemory(VkDevice                     this->m_device,
-//												const VkMemoryAllocateInfo * pAllocateInfo,
-//												const VkAllocationCallbacks *pAllocator,
-//												VkDeviceMemory *             pMemory)
-// {
-//	auto d = reinterpret_cast<PFN_Table *>(this->m_device);
-//	d->vkAllocateMemory(d->real_device, pAllocateInfo, pAllocator, pMemory);
-
-//	return VK_SUCCESS;
-// }
-
-// VKAPI_ATTR VkResult VKAPI_CALL vkCreateDevice(VkPhysicalDevice             physicalDevice,
-//											  const VkDeviceCreateInfo *   pCreateInfo,
-//											  const VkAllocationCallbacks *pAllocator,
-//											  VkDevice *                   pDevice)
-// {
-//	PFN_vkCreateDevice vkCreateDevice_real = nullptr;
-//	vkCreateDevice_real(physicalDevice, pCreateInfo, pAllocator, pDevice);
-//	auto d = new PFN_Table(*pDevice);
-
-//	pDevice = reinterpret_cast<VkDevice *>(d);
-
-//	return VK_SUCCESS;
-// }
 
 void glfw_create_surface(VkInstance &a_instance, VkSurfaceKHR &a_surface, void *a_window)
 {
@@ -432,71 +393,182 @@ std::vector<_property_type> enumerate_general_property(_function a_fptr, _contex
 	return items;
 }
 
-auto get_queue_indices(VkPhysicalDevice a_physical_device, VkSurfaceKHR a_surface,
-					   float &graphics_queue_priority, float &compute_queue_priority, float &transfer_queue_priority,
-					   const uint32_t &graphics_queue_index, const uint32_t &compute_queue_index, const uint32_t &transfer_queue_index)
+const uint32_t graphics_index{0};
+const uint32_t compute_index{1};
+const uint32_t transfer_index{2};
+const uint32_t sparse_index{3};
+const uint32_t protected_index{4};
+
+const std::vector<VkQueueFlags> all_family_flags{VK_QUEUE_GRAPHICS_BIT,
+												 VK_QUEUE_COMPUTE_BIT,
+												 VK_QUEUE_TRANSFER_BIT,
+												 VK_QUEUE_SPARSE_BINDING_BIT,
+												 VK_QUEUE_PROTECTED_BIT};
+
+struct QueueData
+{
+	QueueData()
+	{
+		this->m_indicies.resize(all_family_flags.size());
+	}
+
+	std::vector<std::pair<uint32_t, uint32_t>> m_indicies{};
+};
+
+// Assumes the queue already has a_queue_flag available
+
+// a_others can only be one flag for this function
+auto get_dedicate_queue_family(std::vector<VkQueueFamilyProperties> &a_queue_families, VkQueueFlags a_queue_flag, VkQueueFlags a_others, uint32_t &a_index)
+{
+	uint32_t index = 0;
+	for (auto &queue_family : a_queue_families)
+	{
+		if (((queue_family.queueFlags & a_queue_flag) == a_queue_flag) &&
+			(queue_family.queueCount > 0) &&
+			!((queue_family.queueFlags & a_others) == a_others))
+		{
+			a_index = index;
+			queue_family.queueCount--;
+			return true;
+		}
+		index++;
+	}
+	return false;
+}
+
+// TODO: Extract out
+auto get_priority(VkQueueFlags a_flag)
+{
+	if (a_flag & VK_QUEUE_GRAPHICS_BIT)
+		return 0.75f;
+	if (a_flag & VK_QUEUE_COMPUTE_BIT)
+		return 1.00f;
+	if (a_flag & VK_QUEUE_TRANSFER_BIT)
+		return 0.50f;
+	if (a_flag & VK_QUEUE_SPARSE_BINDING_BIT)
+		return 0.20f;
+	if (a_flag & VK_QUEUE_PROTECTED_BIT)
+		return 0.10f;
+
+	return 0.0f;
+}
+
+auto get_queue_indices(VkPhysicalDevice a_physical_device, VkSurfaceKHR a_surface, std::vector<float32_t *> &a_priorities_pointers, QueueData &a_queue_data)
 {
 	auto queue_families = enumerate_general_property<VkQueueFamilyProperties, false>(vkGetPhysicalDeviceQueueFamilyProperties, a_physical_device);
 
+	// Other tests
+	// std::vector<VkQueueFamilyProperties> queue_families{
+	//	{VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT,
+	//	 16,
+	//	 64,
+	//	 {1, 1, 1}},
+	//	{VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT,
+	//	 2,
+	//	 64,
+	//	 {1, 1, 1}},
+	//	{VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT | VK_QUEUE_SPARSE_BINDING_BIT,
+	//	 8,
+	//	 64,
+	//	 {1, 1, 1}}};
+
+	// std::vector<VkQueueFamilyProperties> queue_families{
+	//	{VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT | VK_QUEUE_TRANSFER_BIT,
+	//	 2,
+	//	 0,
+	//	 {1, 1, 1}}};
+
+	std::vector<std::pair<bool, uint32_t>> found_indices{};
+	found_indices.resize(all_family_flags.size());
+
+	found_indices[graphics_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_GRAPHICS_BIT, static_cast<uint32_t>(~VK_QUEUE_GRAPHICS_BIT), found_indices[graphics_index].second);
+	assert(found_indices[graphics_index].first && "No graphics queue found can't continue!");
+
+	found_indices[compute_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT, found_indices[compute_index].second);
+
+	if (!found_indices[compute_index].first)
+	{
+		found_indices[compute_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_COMPUTE_BIT, static_cast<uint32_t>(~VK_QUEUE_GRAPHICS_BIT), found_indices[compute_index].second);
+		assert(found_indices[compute_index].first && "No compute queue found can't continue!");
+	}
+
+	found_indices[transfer_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_COMPUTE_BIT, found_indices[transfer_index].second);
+
+	if (!found_indices[transfer_index].first)
+	{
+		// Get the first one that supports transfer, quite possible the one with Graphics
+		found_indices[transfer_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, static_cast<uint32_t>(~VK_QUEUE_COMPUTE_BIT), found_indices[transfer_index].second);
+		if (!found_indices[transfer_index].first)
+			found_indices[transfer_index].second = found_indices[graphics_index].second;
+	}
+
+	found_indices[sparse_index].first    = get_dedicate_queue_family(queue_families, VK_QUEUE_SPARSE_BINDING_BIT, static_cast<uint32_t>(~VK_QUEUE_SPARSE_BINDING_BIT), found_indices[sparse_index].second);
+	found_indices[protected_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_PROTECTED_BIT, static_cast<uint32_t>(~VK_QUEUE_PROTECTED_BIT), found_indices[protected_index].second);
+
 	std::vector<VkDeviceQueueCreateInfo> device_queue_create_infos{};
-	// device_queue_create_infos.reserve(3);
-	device_queue_create_infos.resize(3);
+	device_queue_create_infos.reserve(all_family_flags.size());
 
 	VkDeviceQueueCreateInfo device_queue_create_info{};
-
 	device_queue_create_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
 	device_queue_create_info.pNext = nullptr;
 	device_queue_create_info.flags = 0;        // Remember if had to change, then need to use vkGetDeviceQueue2
-	// device_queue_create_info.queueFamilyIndex = // assigned in the loop
-	device_queue_create_info.queueCount = 1;
+
+	// device_queue_create_info.queueFamilyIndex = // Assigned in the loop
+	// device_queue_create_info.queueCount = 1;        // Assigned in the loop too
 	// device_queue_create_info.pQueuePriorities =  // Assigned in the loop
 
-	uint32_t index_count = 0;
-	bool     found_graphics_queue{false};
-	bool     found_compute_queue{false};
-	bool     found_transfer_queue{false};
+	std::vector<std::pair<std::optional<uint32_t>, std::vector<float32_t>>> consolidated_families;
+	consolidated_families.resize(queue_families.size());
 
-	for (const auto &queue_family : queue_families)
+	uint32_t priority_index = 0;
+	for (const auto &index : found_indices)
 	{
-		for (size_t i = 0; i < queue_family.queueCount; ++i)
+		if (index.first)
 		{
-			VkBool32 present_support = false;
+			if (!consolidated_families[index.second].first.has_value())
+				consolidated_families[index.second].first = index.second;
 
-			auto result = vkGetPhysicalDeviceSurfaceSupportKHR(a_physical_device, index_count, a_surface, &present_support);
-			assert(result == VK_SUCCESS);
-
-			if (!found_graphics_queue && queue_family.queueFlags & VK_QUEUE_GRAPHICS_BIT && present_support)
-			{
-				device_queue_create_info.pQueuePriorities       = &graphics_queue_priority;
-				device_queue_create_info.queueFamilyIndex       = index_count;
-				device_queue_create_infos[graphics_queue_index] = device_queue_create_info;
-				found_graphics_queue                            = true;
-				break;
-			}
-
-			if (!found_compute_queue && queue_family.queueFlags & VK_QUEUE_COMPUTE_BIT)
-			{
-				device_queue_create_info.pQueuePriorities      = &compute_queue_priority;
-				device_queue_create_info.queueFamilyIndex      = index_count;
-				device_queue_create_infos[compute_queue_index] = device_queue_create_info;
-				found_compute_queue                            = true;
-				break;
-			}
-
-			if (!found_transfer_queue && queue_family.queueFlags & VK_QUEUE_TRANSFER_BIT)
-			{
-				device_queue_create_info.pQueuePriorities       = &transfer_queue_priority;
-				device_queue_create_info.queueFamilyIndex       = index_count;
-				device_queue_create_infos[transfer_queue_index] = device_queue_create_info;
-				found_transfer_queue                            = true;
-				break;
-			}
+			assert(consolidated_families[index.second].first == index.second && "Index mismatch for queue family!");
+			consolidated_families[index.second].second.push_back(get_priority(all_family_flags[priority_index]));
+			a_queue_data.m_indicies[priority_index] = std::make_pair(index.second, consolidated_families[index.second].second.size() - 1);
 		}
-
-		index_count++;
+		priority_index++;
 	}
 
-	assert(device_queue_create_infos.size() == 3);        // Probably very rigid
+	{
+		VkBool32 present_support = false;
+		auto     result          = vkGetPhysicalDeviceSurfaceSupportKHR(a_physical_device, a_queue_data.m_indicies[graphics_index].first, a_surface, &present_support);
+		assert(result == VK_SUCCESS);
+		assert(present_support && "Graphics queue chosen doesn't support presentation!");
+	}
+	{
+		VkBool32 present_support = false;
+		auto     result          = vkGetPhysicalDeviceSurfaceSupportKHR(a_physical_device, a_queue_data.m_indicies[compute_index].first, a_surface, &present_support);
+		assert(result == VK_SUCCESS);
+		assert(present_support && "Compute queue chosen doesn't support presentation!");
+	}
+
+	for (const auto &queue_family : consolidated_families)
+	{
+		if (queue_family.first.has_value())
+		{
+			auto pptr = new float32_t[queue_family.second.size()];
+			a_priorities_pointers.push_back(pptr);
+
+			for (size_t i = 0; i < queue_family.second.size(); ++i)
+			{
+				pptr[i] = queue_family.second[i];
+			}
+
+			device_queue_create_info.pQueuePriorities = pptr;
+			device_queue_create_info.queueFamilyIndex = queue_family.first.value();
+			device_queue_create_info.queueCount       = utl::static_cast_safe<uint32_t>(queue_family.second.size());
+
+			device_queue_create_infos.push_back(device_queue_create_info);
+		}
+	}
+
+	assert(device_queue_create_infos.size() >= 1);
 
 	return device_queue_create_infos;
 }
@@ -558,7 +630,7 @@ class Instance : public VulkanObject<VkInstance>
 #if defined(USE_VOLK_INSTEAD)
 		volkInitialize();
 #else
-		init_vk_global_symbols();
+													 // init_vk_global_symbols();
 #endif
 
 		// Set debug messenger callback setup required later after instance creation
@@ -612,7 +684,7 @@ class Instance : public VulkanObject<VkInstance>
 #if defined(USE_VOLK_INSTEAD)
 		volkLoadInstance(instance_handle);
 #else
-		init_vk_instance_symbols(this->get_handle());
+													 // init_vk_instance_symbols(this->get_handle());
 #endif
 
 		result = vkCreateDebugUtilsMessengerEXT(this->get_handle(), &debug_messenger_create_info, cfg::VkAllocator, &m_messenger);
@@ -673,22 +745,16 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			this->m_physical_device = gpus[0];
 		}
 
-		// TODO: Select properties you need here
+		// TODO: Select properties/features you need here
 		vkGetPhysicalDeviceFeatures(this->m_physical_device, &this->m_physical_device_features);
 
-		float graphics_queue_priority = 1.0f;
-		float compute_queue_priority  = 0.75f;
-		float transfer_queue_priority = 0.50f;
-
-		uint32_t graphics_queue_index = 0;
-		uint32_t compute_queue_index  = 1;
-		uint32_t transfer_queue_index = 2;
-
-		VkDeviceCreateInfo device_create_info{};
+		VkDeviceCreateInfo       device_create_info{};
+		std::vector<float32_t *> priorities_pointers;
+		QueueData                queue_data{};
 
 		auto extensions = vkd::enumerate_properties<VkPhysicalDevice, VkExtensionProperties>(this->m_physical_device);
 		auto layers     = vkd::enumerate_properties<VkPhysicalDevice, VkLayerProperties>(this->m_physical_device);
-		auto queues     = vkd::get_queue_indices(this->m_physical_device, this->m_surface, graphics_queue_priority, compute_queue_priority, transfer_queue_priority, graphics_queue_index, compute_queue_index, transfer_queue_index);
+		auto queues     = vkd::get_queue_indices(this->m_physical_device, this->m_surface, priorities_pointers, queue_data);
 
 		device_create_info.sType                   = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
 		device_create_info.pNext                   = nullptr;
@@ -704,16 +770,22 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		result = vkCreateDevice(this->m_physical_device, &device_create_info, cfg::VkAllocator, &this->m_device);
 		assert(result == VK_SUCCESS);
 
-// Lets init this->m_device specific symbols
+		// delete priorities_pointers;
+		for (auto priority : priorities_pointers)
+			delete priority;
+		priorities_pointers.clear();
+
 #if defined(USE_VOLK_INSTEAD)
+		// Lets init this->m_device specific symbols
 		volkLoadDevice(m_device);
 #else
-		init_vk_device_symbols(this->m_device);
 #endif
 
-		vkGetDeviceQueue(this->m_device, queues[graphics_queue_index].queueFamilyIndex, 0, &this->m_graphics_queue);
-		vkGetDeviceQueue(this->m_device, queues[compute_queue_index].queueFamilyIndex, 0, &this->m_compute_queue);
-		vkGetDeviceQueue(this->m_device, queues[transfer_queue_index].queueFamilyIndex, 0, &this->m_transfer_queue);
+		vkGetDeviceQueue(this->m_device, queues[queue_data.m_indicies[graphics_index].first].queueFamilyIndex, queue_data.m_indicies[graphics_index].second, &this->m_graphics_queue);
+		vkGetDeviceQueue(this->m_device, queues[queue_data.m_indicies[compute_index].first].queueFamilyIndex, queue_data.m_indicies[compute_index].second, &this->m_compute_queue);
+		vkGetDeviceQueue(this->m_device, queues[queue_data.m_indicies[transfer_index].first].queueFamilyIndex, queue_data.m_indicies[transfer_index].second, &this->m_transfer_queue);
+		vkGetDeviceQueue(this->m_device, queues[queue_data.m_indicies[sparse_index].first].queueFamilyIndex, queue_data.m_indicies[sparse_index].second, &this->m_sparse_queue);
+		vkGetDeviceQueue(this->m_device, queues[queue_data.m_indicies[protected_index].first].queueFamilyIndex, queue_data.m_indicies[protected_index].second, &this->m_protected_queue);
 
 		// Tranfer and Present queues are the same
 		this->m_present_queue = this->m_graphics_queue;
@@ -733,6 +805,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	VkQueue                    m_compute_queue{nullptr};
 	VkQueue                    m_transfer_queue{nullptr};
 	VkQueue                    m_present_queue{nullptr};
+	VkQueue                    m_sparse_queue{nullptr};
+	VkQueue                    m_protected_queue{nullptr};
 };
 
 class Context
