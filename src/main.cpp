@@ -25,6 +25,7 @@
 
 #include "vulkan/vulkan_rhi.hpp"
 #include <GLFW/glfw3.h>
+#include <cstdio>
 #include <iostream>
 
 bool         update_animation = true;
@@ -117,7 +118,10 @@ class VulkanApplication
 	void init()
 	{
 		if (!glfwInit())
+		{
+			printf("GLFW Init failed, check if you have a working display set!\n");
 			exit(EXIT_FAILURE);
+		}
 
 		glfwWindowHint(GLFW_DEPTH_BITS, 16);
 		glfwWindowHint(GLFW_SAMPLES, 4);

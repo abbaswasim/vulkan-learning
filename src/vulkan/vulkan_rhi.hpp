@@ -63,8 +63,10 @@
 		__pragma(warning(pop))
 #endif
 
+VKBP_DISABLE_WARNINGS();
 #include "profiling/rorlog.hpp"
 #include "roar.hpp"
+VKBP_ENABLE_WARNINGS();
 
 // TODO:: This bit should be in CMakeLists.txt somewhere
 #if defined __APPLE__
@@ -182,7 +184,6 @@ FORCE_INLINE _type_to static_cast_safe(_type_from a_value)
 
 namespace vkd
 {
-
 void glfw_create_surface(VkInstance &a_instance, VkSurfaceKHR &a_surface, void *a_window)
 {
 	assert(a_instance);
@@ -418,7 +419,7 @@ struct QueueData
 // Assumes the queue already has a_queue_flag available
 
 // a_others can only be one flag for this function
-auto get_dedicate_queue_family(std::vector<VkQueueFamilyProperties> &a_queue_families, VkQueueFlags a_queue_flag, VkQueueFlags a_others, uint32_t &a_index)
+auto get_dedicated_queue_family(std::vector<VkQueueFamilyProperties> &a_queue_families, VkQueueFlags a_queue_flag, VkQueueFlags a_others, uint32_t &a_index)
 {
 	uint32_t index = 0;
 	for (auto &queue_family : a_queue_families)
@@ -481,29 +482,29 @@ auto get_queue_indices(VkPhysicalDevice a_physical_device, VkSurfaceKHR a_surfac
 	std::vector<std::pair<bool, uint32_t>> found_indices{};
 	found_indices.resize(all_family_flags.size());
 
-	found_indices[graphics_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_GRAPHICS_BIT, static_cast<uint32_t>(~VK_QUEUE_GRAPHICS_BIT), found_indices[graphics_index].second);
+	found_indices[graphics_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_GRAPHICS_BIT, static_cast<uint32_t>(~VK_QUEUE_GRAPHICS_BIT), found_indices[graphics_index].second);
 	assert(found_indices[graphics_index].first && "No graphics queue found can't continue!");
 
-	found_indices[compute_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT, found_indices[compute_index].second);
+	found_indices[compute_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_COMPUTE_BIT, VK_QUEUE_GRAPHICS_BIT, found_indices[compute_index].second);
 
 	if (!found_indices[compute_index].first)
 	{
-		found_indices[compute_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_COMPUTE_BIT, static_cast<uint32_t>(~VK_QUEUE_GRAPHICS_BIT), found_indices[compute_index].second);
+		found_indices[compute_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_COMPUTE_BIT, static_cast<uint32_t>(~VK_QUEUE_GRAPHICS_BIT), found_indices[compute_index].second);
 		assert(found_indices[compute_index].first && "No compute queue found can't continue!");
 	}
 
-	found_indices[transfer_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_COMPUTE_BIT, found_indices[transfer_index].second);
+	found_indices[transfer_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_COMPUTE_BIT, found_indices[transfer_index].second);
 
 	if (!found_indices[transfer_index].first)
 	{
 		// Get the first one that supports transfer, quite possible the one with Graphics
-		found_indices[transfer_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, static_cast<uint32_t>(~VK_QUEUE_COMPUTE_BIT), found_indices[transfer_index].second);
+		found_indices[transfer_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, static_cast<uint32_t>(~VK_QUEUE_COMPUTE_BIT), found_indices[transfer_index].second);
 		if (!found_indices[transfer_index].first)
 			found_indices[transfer_index].second = found_indices[graphics_index].second;
 	}
 
-	found_indices[sparse_index].first    = get_dedicate_queue_family(queue_families, VK_QUEUE_SPARSE_BINDING_BIT, static_cast<uint32_t>(~VK_QUEUE_SPARSE_BINDING_BIT), found_indices[sparse_index].second);
-	found_indices[protected_index].first = get_dedicate_queue_family(queue_families, VK_QUEUE_PROTECTED_BIT, static_cast<uint32_t>(~VK_QUEUE_PROTECTED_BIT), found_indices[protected_index].second);
+	found_indices[sparse_index].first    = get_dedicated_queue_family(queue_families, VK_QUEUE_SPARSE_BINDING_BIT, static_cast<uint32_t>(~VK_QUEUE_SPARSE_BINDING_BIT), found_indices[sparse_index].second);
+	found_indices[protected_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_PROTECTED_BIT, static_cast<uint32_t>(~VK_QUEUE_PROTECTED_BIT), found_indices[protected_index].second);
 
 	std::vector<VkDeviceQueueCreateInfo> device_queue_create_infos{};
 	device_queue_create_infos.reserve(all_family_flags.size());
@@ -706,6 +707,9 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	FORCE_INLINE PhysicalDevice &operator=(PhysicalDevice &&a_other) noexcept = default;        //! Move assignment operator
 	FORCE_INLINE virtual ~PhysicalDevice() noexcept
 	{
+		vkDestroySwapchainKHR(this->m_device, this->m_swapchain, cfg::VkAllocator);
+		this->m_swapchain = nullptr;
+
 		vkDestroySurfaceKHR(this->m_instance, this->m_surface, nullptr);
 		this->m_surface = nullptr;
 
@@ -713,18 +717,27 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->m_device = nullptr;
 	}
 
+	PhysicalDevice(VkInstance a_instance, void *a_window) :
+		m_instance(a_instance)
+	{
+		// Order of these calls is important, don't reorder
+		this->create_surface(a_window);
+		this->create_physical_device();
+		this->create_device();
+		this->set_handle(this->m_physical_device);
+		this->create_swapchain();
+		this->create_imageviews();
+	}
+
+  protected:
+  private:
 	void create_surface(void *a_window)
 	{
 		glfw_create_surface(this->m_instance, this->m_surface, a_window);
 	}
 
-	PhysicalDevice(VkInstance a_instance, void *a_window) :
-		m_instance(a_instance)
+	void create_physical_device()
 	{
-		this->create_surface(a_window);
-
-		VkResult result = VK_SUCCESS;
-
 		auto gpus = enumerate_general_property<VkPhysicalDevice, true>(vkEnumeratePhysicalDevices, this->m_instance);
 
 		for (auto gpu : gpus)
@@ -744,7 +757,10 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			assert(gpus.size() > 1);
 			this->m_physical_device = gpus[0];
 		}
+	}
 
+	void create_device()
+	{
 		// TODO: Select properties/features you need here
 		vkGetPhysicalDeviceFeatures(this->m_physical_device, &this->m_physical_device_features);
 
@@ -767,7 +783,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		device_create_info.ppEnabledExtensionNames = extensions.data();
 		device_create_info.pEnabledFeatures        = &this->m_physical_device_features;
 
-		result = vkCreateDevice(this->m_physical_device, &device_create_info, cfg::VkAllocator, &this->m_device);
+		auto result = vkCreateDevice(this->m_physical_device, &device_create_info, cfg::VkAllocator, &this->m_device);
 		assert(result == VK_SUCCESS);
 
 		// delete priorities_pointers;
@@ -787,16 +803,107 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		vkGetDeviceQueue(this->m_device, queues[queue_data.m_indicies[sparse_index].first].queueFamilyIndex, queue_data.m_indicies[sparse_index].second, &this->m_sparse_queue);
 		vkGetDeviceQueue(this->m_device, queues[queue_data.m_indicies[protected_index].first].queueFamilyIndex, queue_data.m_indicies[protected_index].second, &this->m_protected_queue);
 
-		// Tranfer and Present queues are the same
+		// Graphics and Present queues are the same
 		this->m_present_queue = this->m_graphics_queue;
-
-		this->set_handle(this->m_physical_device);
 	}
 
-  protected:
-  private:
-	VkInstance                 m_instance{nullptr};        // Alias
-	VkPhysicalDevice           m_physical_device{nullptr};
+	void create_swapchain()
+	{
+		VkSurfaceCapabilitiesKHR capabilities;
+
+		std::vector<VkSurfaceFormatKHR> surface_formats;
+		std::vector<VkPresentModeKHR>   present_modes;
+
+		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(this->get_handle(), this->m_surface, &capabilities);
+		assert(capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max());
+
+		// TODO: There is better way of doing this
+		this->m_swapchain_extent = capabilities.currentExtent;
+		uint32_t image_count     = capabilities.minImageCount + 1;
+		if (capabilities.maxImageCount > 0 && image_count > capabilities.maxImageCount)
+		{
+			image_count = capabilities.maxImageCount;
+		}
+
+		uint32_t format_count;
+		VkResult result = vkGetPhysicalDeviceSurfaceFormatsKHR(this->get_handle(), this->m_surface, &format_count, nullptr);
+		assert(result == VK_SUCCESS);
+		surface_formats.resize(format_count);
+		result = vkGetPhysicalDeviceSurfaceFormatsKHR(this->get_handle(), this->m_surface, &format_count, surface_formats.data());
+		assert(result == VK_SUCCESS);
+
+		// Choose format
+		VkSurfaceFormatKHR surface_format;
+		bool               surface_found = false;
+		for (const auto &available_format : surface_formats)
+		{
+			if (available_format.format == VK_FORMAT_B8G8R8A8_UNORM && available_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+			{
+				surface_format = available_format;
+				surface_found  = true;
+				break;
+			}
+		}
+
+		assert(surface_found);
+
+		this->m_swapchain_format = surface_format.format;
+
+		uint32_t present_mode_count;
+		result = vkGetPhysicalDeviceSurfacePresentModesKHR(this->get_handle(), this->m_surface, &present_mode_count, nullptr);
+		assert(result == VK_SUCCESS);
+		present_modes.resize(present_mode_count);
+		result = vkGetPhysicalDeviceSurfacePresentModesKHR(this->get_handle(), this->m_surface, &present_mode_count, present_modes.data());
+		assert(result == VK_SUCCESS);
+
+		// Choose present mode
+		VkPresentModeKHR present_mode = VK_PRESENT_MODE_MAX_ENUM_KHR;
+
+		for (const auto &available_present_mode : present_modes)
+		{
+			if (available_present_mode == VK_PRESENT_MODE_FIFO_KHR)
+			{
+				present_mode = available_present_mode;
+				break;
+			}
+		}
+
+		assert(present_mode != VK_PRESENT_MODE_MAX_ENUM_KHR);
+
+		VkSwapchainCreateInfoKHR swapchain_create_info = {};
+		swapchain_create_info.sType                    = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+		swapchain_create_info.pNext                    = nullptr;
+		swapchain_create_info.flags                    = 0;
+		swapchain_create_info.surface                  = this->m_surface;
+		swapchain_create_info.minImageCount            = image_count;
+		swapchain_create_info.imageFormat              = surface_format.format;
+		swapchain_create_info.imageColorSpace          = surface_format.colorSpace;
+		swapchain_create_info.imageExtent              = this->m_swapchain_extent;
+		swapchain_create_info.imageArrayLayers         = 1;
+		swapchain_create_info.imageUsage               = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;        // TODO: Need to rethink this one
+		swapchain_create_info.imageSharingMode         = VK_SHARING_MODE_EXCLUSIVE;                  // TODO: Using same family index for same queues, configure/fix this too
+		swapchain_create_info.queueFamilyIndexCount    = 0;
+		swapchain_create_info.pQueueFamilyIndices      = nullptr;
+		swapchain_create_info.preTransform             = capabilities.currentTransform;
+		swapchain_create_info.compositeAlpha           = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+		swapchain_create_info.presentMode              = present_mode;
+		swapchain_create_info.clipped                  = VK_TRUE;
+		swapchain_create_info.oldSwapchain             = VK_NULL_HANDLE;
+
+		result = vkCreateSwapchainKHR(this->m_device, &swapchain_create_info, cfg::VkAllocator, &this->m_swapchain);
+		assert(result == VK_SUCCESS);
+
+		vkGetSwapchainImagesKHR(this->m_device, this->m_swapchain, &image_count, nullptr);
+		this->m_swapchain_images.resize(image_count);
+		vkGetSwapchainImagesKHR(this->m_device, this->m_swapchain, &image_count, this->m_swapchain_images.data());
+	}
+
+	void create_imageviews()
+	{
+	}
+
+	VkInstance                 m_instance{nullptr};               // Alias
+	VkPhysicalDevice           m_physical_device{nullptr};        // TODO: This is not required, its already in handle, change will finalize the name of the class
 	VkDevice                   m_device{nullptr};
 	VkSurfaceKHR               m_surface{nullptr};
 	VkPhysicalDeviceFeatures   m_physical_device_features{};
@@ -807,6 +914,10 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	VkQueue                    m_present_queue{nullptr};
 	VkQueue                    m_sparse_queue{nullptr};
 	VkQueue                    m_protected_queue{nullptr};
+	std::vector<VkImage>       m_swapchain_images;
+	VkSwapchainKHR             m_swapchain{nullptr};
+	VkFormat                   m_swapchain_format{VK_FORMAT_B8G8R8A8_SRGB};
+	VkExtent2D                 m_swapchain_extent{1024, 800};
 };
 
 class Context
