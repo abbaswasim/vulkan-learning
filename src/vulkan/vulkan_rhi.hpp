@@ -85,6 +85,8 @@ VKBP_ENABLE_WARNINGS();
 // #define GLFW_INCLUDE_VULKAN // Not required if vulkan.h included before this
 #include <GLFW/glfw3.h>
 
+#define VULKANED_USE_GLFW 1
+
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -158,6 +160,32 @@ FORCE_INLINE std::vector<const char *> get_device_layers_requested()
 	return std::vector<const char *>{};
 }
 
+FORCE_INLINE uint32_t get_number_of_buffers()
+{
+	return 3;        // Tripple buffering
+}
+
+FORCE_INLINE auto get_vsync()
+{
+	// TODO: No vsync available on Android so when enabling make sure android is guarded
+	return false;
+}
+
+FORCE_INLINE auto get_window_transparent()
+{
+	return false;
+}
+
+FORCE_INLINE auto get_window_premultiplied()
+{
+	return false;
+}
+
+FORCE_INLINE auto get_window_prerotated()
+{
+	return false;
+}
+
 VkAllocationCallbacks *VkAllocator = nullptr;
 
 }        // namespace cfg
@@ -184,15 +212,75 @@ FORCE_INLINE _type_to static_cast_safe(_type_from a_value)
 
 namespace vkd
 {
-void glfw_create_surface(VkInstance &a_instance, VkSurfaceKHR &a_surface, void *a_window)
+FORCE_INLINE auto get_surface_format()
+{
+	return VK_FORMAT_B8G8R8A8_SRGB;
+}
+
+FORCE_INLINE auto get_surface_colorspace()
+{
+	return VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+}
+
+FORCE_INLINE auto get_surface_transform()
+{
+	// TODO: Fix the hardcode 90 degree rotation
+	return cfg::get_window_prerotated() ? VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR : VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+}
+
+FORCE_INLINE auto get_surface_composition_mode()
+{
+	return (cfg::get_window_transparent() ?
+				(cfg::get_window_premultiplied() ?
+					 VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR :
+					 VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR) :
+				VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
+}
+
+FORCE_INLINE auto get_swapchain_usage()
+{
+	return VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+}
+
+FORCE_INLINE auto get_swapchain_sharing_mode(uint32_t a_queue_family_indices[2])
+{
+	VkSwapchainCreateInfoKHR create_info{};
+
+	if (a_queue_family_indices[0] != a_queue_family_indices[1])
+	{
+		create_info.imageSharingMode      = VK_SHARING_MODE_CONCURRENT;
+		create_info.queueFamilyIndexCount = 2;
+		create_info.pQueueFamilyIndices   = a_queue_family_indices;
+	}
+	else
+	{
+		create_info.imageSharingMode      = VK_SHARING_MODE_EXCLUSIVE;
+		create_info.queueFamilyIndexCount = 0;              // Optional
+		create_info.pQueueFamilyIndices   = nullptr;        // Optional
+	}
+
+	return create_info;
+}
+
+void glfw_create_surface(VkInstance &a_instance, VkSurfaceKHR &a_surface, GLFWwindow *a_window)
 {
 	assert(a_instance);
 	assert(a_window);
 
-	VkResult status = glfwCreateWindowSurface(a_instance, reinterpret_cast<GLFWwindow *>(a_window), nullptr, &a_surface);
+	VkResult status = glfwCreateWindowSurface(a_instance, a_window, nullptr, &a_surface);
 
 	if (status != VK_SUCCESS)
 		ror::log_critical("WARNING! Window surface creation failed");
+}
+
+auto glfw_get_buffer_size(GLFWwindow *a_window)
+{
+	assert(a_window);
+
+	int w, h;
+	glfwGetFramebufferSize(a_window, &w, &h);
+
+	return std::make_pair(static_cast<uint32_t>(w), static_cast<uint32_t>(h));
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vk_debug_generic_callback(
@@ -368,25 +456,34 @@ std::vector<const char *> enumerate_properties(_type a_context = nullptr)
 	return properties_available;
 }
 
-template <class _property_type, bool _returns, class _context_type, typename _function>
-std::vector<_property_type> enumerate_general_property(_function a_fptr, _context_type a_context = nullptr)
+// Inspired by vulkaninfo GetVectorInit
+template <class _property_type, bool _returns, typename _function, typename... _rest>
+std::vector<_property_type> enumerate_general_property(_function &&a_fptr, _rest &&...a_rest_of_args)
 {
-	VkResult result = VK_SUCCESS;
+	// TODO: Add some indication of function name or where the error comes from
 
-	unsigned int count;
-	if constexpr (_returns)
-		result = a_fptr(a_context, &count, nullptr);
-	else
-		a_fptr(a_context, &count, nullptr);
+	VkResult                    result{VK_SUCCESS};
+	unsigned int                count{0};
+	std::vector<_property_type> items;
 
-	assert(result == VK_SUCCESS && "enumerate general failed!");
-	assert(count > 0 && "None of the properties required are available");
+	do
+	{
+		if constexpr (_returns)
+			result = a_fptr(a_rest_of_args..., &count, nullptr);
+		else
+			a_fptr(a_rest_of_args..., &count, nullptr);
 
-	std::vector<_property_type> items(count);
-	if constexpr (_returns)
-		result = a_fptr(a_context, &count, items.data());
-	else
-		a_fptr(a_context, &count, items.data());
+		assert(result == VK_SUCCESS && "enumerate general failed!");
+		assert(count > 0 && "None of the properties required are available");
+
+		items.resize(count, _property_type{});
+
+		if constexpr (_returns)
+			result = a_fptr(a_rest_of_args..., &count, items.data());
+		else
+			a_fptr(a_rest_of_args..., &count, items.data());
+
+	} while (result == VK_INCOMPLETE);
 
 	assert(result == VK_SUCCESS && "enumerate general failed!");
 	assert(count > 0 && "None of the properties required are available");
@@ -707,6 +804,12 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	FORCE_INLINE PhysicalDevice &operator=(PhysicalDevice &&a_other) noexcept = default;        //! Move assignment operator
 	FORCE_INLINE virtual ~PhysicalDevice() noexcept
 	{
+		for (auto& image_view : this->m_swapchain_image_views)
+		{
+			vkDestroyImageView(this->m_device, image_view, cfg::VkAllocator);
+			image_view = nullptr;
+		}
+
 		vkDestroySwapchainKHR(this->m_device, this->m_swapchain, cfg::VkAllocator);
 		this->m_swapchain = nullptr;
 
@@ -718,10 +821,10 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	}
 
 	PhysicalDevice(VkInstance a_instance, void *a_window) :
-		m_instance(a_instance)
+		m_instance(a_instance), m_window(a_window)
 	{
 		// Order of these calls is important, don't reorder
-		this->create_surface(a_window);
+		this->create_surface(this->m_window);
 		this->create_physical_device();
 		this->create_device();
 		this->set_handle(this->m_physical_device);
@@ -733,7 +836,19 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
   private:
 	void create_surface(void *a_window)
 	{
-		glfw_create_surface(this->m_instance, this->m_surface, a_window);
+		// TODO: Remove the if from here
+#if defined(VULKANED_USE_GLFW)
+		glfw_create_surface(this->m_instance, this->m_surface, reinterpret_cast<GLFWwindow *>(a_window));
+#endif
+	}
+
+	auto get_framebuffer_size(void *a_window)
+	{
+#if defined(VULKANED_USE_GLFW)
+		return glfw_get_buffer_size(reinterpret_cast<GLFWwindow *>(a_window));
+#else
+		return nullptr;
+#endif
 	}
 
 	void create_physical_device()
@@ -810,34 +925,36 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	void create_swapchain()
 	{
 		VkSurfaceCapabilitiesKHR capabilities;
-
-		std::vector<VkSurfaceFormatKHR> surface_formats;
-		std::vector<VkPresentModeKHR>   present_modes;
-
 		vkGetPhysicalDeviceSurfaceCapabilitiesKHR(this->get_handle(), this->m_surface, &capabilities);
 		assert(capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max());
 
-		// TODO: There is better way of doing this
-		this->m_swapchain_extent = capabilities.currentExtent;
-		uint32_t image_count     = capabilities.minImageCount + 1;
+		if (capabilities.currentExtent.width == 0xFFFFFFFF && capabilities.currentExtent.height == 0xFFFFFFFF)
+			this->m_swapchain_extent = capabilities.currentExtent;
+		else
+		{
+			auto extent = this->get_framebuffer_size(this->m_window);
+
+			VkExtent2D actualExtent         = {extent.first, extent.second};
+			this->m_swapchain_extent.width  = std::clamp(actualExtent.width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width);
+			this->m_swapchain_extent.height = std::clamp(actualExtent.height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height);
+		}
+
+		uint32_t image_count = cfg::get_number_of_buffers();
 		if (capabilities.maxImageCount > 0 && image_count > capabilities.maxImageCount)
 		{
 			image_count = capabilities.maxImageCount;
 		}
+		assert(image_count >= capabilities.minImageCount && image_count <= capabilities.maxImageCount && "Min image count for swapchain is bigger than requested!\n");
 
-		uint32_t format_count;
-		VkResult result = vkGetPhysicalDeviceSurfaceFormatsKHR(this->get_handle(), this->m_surface, &format_count, nullptr);
-		assert(result == VK_SUCCESS);
-		surface_formats.resize(format_count);
-		result = vkGetPhysicalDeviceSurfaceFormatsKHR(this->get_handle(), this->m_surface, &format_count, surface_formats.data());
-		assert(result == VK_SUCCESS);
+		auto surface_formats = enumerate_general_property<VkSurfaceFormatKHR, true>(vkGetPhysicalDeviceSurfaceFormatsKHR, this->get_handle(), this->m_surface);
 
 		// Choose format
 		VkSurfaceFormatKHR surface_format;
 		bool               surface_found = false;
 		for (const auto &available_format : surface_formats)
 		{
-			if (available_format.format == VK_FORMAT_B8G8R8A8_UNORM && available_format.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR)
+			if (available_format.format == vkd::get_surface_format() &&
+				available_format.colorSpace == vkd::get_surface_colorspace())
 			{
 				surface_format = available_format;
 				surface_found  = true;
@@ -845,30 +962,41 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			}
 		}
 
+		if (!surface_found)
+		{
+			surface_format = surface_formats[0];        // Get the first one otherwise
+			surface_found  = true;
+			ror::log_error("Requested surface format and color space not available, chosing the first one!\n");
+		}
+
 		assert(surface_found);
 
 		this->m_swapchain_format = surface_format.format;
 
-		uint32_t present_mode_count;
-		result = vkGetPhysicalDeviceSurfacePresentModesKHR(this->get_handle(), this->m_surface, &present_mode_count, nullptr);
-		assert(result == VK_SUCCESS);
-		present_modes.resize(present_mode_count);
-		result = vkGetPhysicalDeviceSurfacePresentModesKHR(this->get_handle(), this->m_surface, &present_mode_count, present_modes.data());
-		assert(result == VK_SUCCESS);
+		auto present_modes = enumerate_general_property<VkPresentModeKHR, true>(vkGetPhysicalDeviceSurfacePresentModesKHR, this->get_handle(), this->m_surface);
 
-		// Choose present mode
-		VkPresentModeKHR present_mode = VK_PRESENT_MODE_MAX_ENUM_KHR;
+		// Start with the only available present mode and change if requested
+		VkPresentModeKHR present_mode{VK_PRESENT_MODE_FIFO_KHR};
 
-		for (const auto &available_present_mode : present_modes)
+		if (cfg::get_vsync())
 		{
-			if (available_present_mode == VK_PRESENT_MODE_FIFO_KHR)
+			present_mode = VK_PRESENT_MODE_MAX_ENUM_KHR;
+			VkPresentModeKHR present_mode_required{VK_PRESENT_MODE_IMMEDIATE_KHR};
+
+			for (const auto &available_present_mode : present_modes)
 			{
-				present_mode = available_present_mode;
-				break;
+				if (available_present_mode == present_mode_required)
+				{
+					present_mode = available_present_mode;
+					break;
+				}
 			}
+
+			assert(present_mode != VK_PRESENT_MODE_MAX_ENUM_KHR);
 		}
 
-		assert(present_mode != VK_PRESENT_MODE_MAX_ENUM_KHR);
+		uint32_t queue_family_indices[]{0, 0};        // TODO: Get graphics and present queue indices
+		auto     sci = vkd::get_swapchain_sharing_mode(queue_family_indices);
 
 		VkSwapchainCreateInfoKHR swapchain_create_info = {};
 		swapchain_create_info.sType                    = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
@@ -880,26 +1008,51 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		swapchain_create_info.imageColorSpace          = surface_format.colorSpace;
 		swapchain_create_info.imageExtent              = this->m_swapchain_extent;
 		swapchain_create_info.imageArrayLayers         = 1;
-		swapchain_create_info.imageUsage               = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;        // TODO: Need to rethink this one
-		swapchain_create_info.imageSharingMode         = VK_SHARING_MODE_EXCLUSIVE;                  // TODO: Using same family index for same queues, configure/fix this too
-		swapchain_create_info.queueFamilyIndexCount    = 0;
-		swapchain_create_info.pQueueFamilyIndices      = nullptr;
-		swapchain_create_info.preTransform             = capabilities.currentTransform;
-		swapchain_create_info.compositeAlpha           = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+		swapchain_create_info.imageUsage               = vkd::get_swapchain_usage();
+		swapchain_create_info.imageSharingMode         = sci.imageSharingMode;
+		swapchain_create_info.queueFamilyIndexCount    = sci.queueFamilyIndexCount;
+		swapchain_create_info.pQueueFamilyIndices      = sci.pQueueFamilyIndices;
+		swapchain_create_info.preTransform             = vkd::get_surface_transform();
+		swapchain_create_info.compositeAlpha           = vkd::get_surface_composition_mode();
 		swapchain_create_info.presentMode              = present_mode;
 		swapchain_create_info.clipped                  = VK_TRUE;
 		swapchain_create_info.oldSwapchain             = VK_NULL_HANDLE;
 
-		result = vkCreateSwapchainKHR(this->m_device, &swapchain_create_info, cfg::VkAllocator, &this->m_swapchain);
+		auto result = vkCreateSwapchainKHR(this->m_device, &swapchain_create_info, cfg::VkAllocator, &this->m_swapchain);
 		assert(result == VK_SUCCESS);
 
-		vkGetSwapchainImagesKHR(this->m_device, this->m_swapchain, &image_count, nullptr);
-		this->m_swapchain_images.resize(image_count);
-		vkGetSwapchainImagesKHR(this->m_device, this->m_swapchain, &image_count, this->m_swapchain_images.data());
+		this->m_swapchain_images = enumerate_general_property<VkImage, true>(vkGetSwapchainImagesKHR, this->m_device, this->m_swapchain);
 	}
 
 	void create_imageviews()
 	{
+		// Creating an image view for all swapchain images
+		this->m_swapchain_image_views.resize(this->m_swapchain_images.size());
+
+		for (size_t i = 0; i < this->m_swapchain_images.size(); ++i)
+		{
+			VkImageViewCreateInfo image_view_create_info = {};
+			image_view_create_info.sType                 = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+			image_view_create_info.pNext                 = nullptr;
+			image_view_create_info.flags                 = 0;
+			image_view_create_info.image                 = this->m_swapchain_images[i];
+			image_view_create_info.viewType              = VK_IMAGE_VIEW_TYPE_2D;
+			image_view_create_info.format                = this->m_swapchain_format;
+
+			image_view_create_info.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+			image_view_create_info.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+			image_view_create_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+			image_view_create_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+			image_view_create_info.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+			image_view_create_info.subresourceRange.baseMipLevel   = 0;
+			image_view_create_info.subresourceRange.levelCount     = 1;
+			image_view_create_info.subresourceRange.baseArrayLayer = 0;
+			image_view_create_info.subresourceRange.layerCount     = 1;
+
+			VkResult result = vkCreateImageView(this->m_device, &image_view_create_info, nullptr, &this->m_swapchain_image_views[i]);
+			assert(result == VK_SUCCESS);
+		}
 	}
 
 	VkInstance                 m_instance{nullptr};               // Alias
@@ -915,9 +1068,11 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	VkQueue                    m_sparse_queue{nullptr};
 	VkQueue                    m_protected_queue{nullptr};
 	std::vector<VkImage>       m_swapchain_images;
+	std::vector<VkImageView>   m_swapchain_image_views;
 	VkSwapchainKHR             m_swapchain{nullptr};
 	VkFormat                   m_swapchain_format{VK_FORMAT_B8G8R8A8_SRGB};
 	VkExtent2D                 m_swapchain_extent{1024, 800};
+	void *                     m_window{nullptr};        // Window type that can be glfw or nullptr
 };
 
 class Context
