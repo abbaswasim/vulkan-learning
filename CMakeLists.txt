@@ -84,6 +84,11 @@ set(VULKANED_REQUIRED_LIBRARIES
 
 target_link_libraries(${VULKANED_NAME} PRIVATE ${VULKANED_REQUIRED_LIBRARIES})
 
+if (USE_VOLK_INSTEAD)
+  target_compile_definitions(${VULKANED_NAME}
+	PRIVATE USE_VOLK_INSTEAD)
+endif()
+
 build_options(${VULKANED_NAME}) # Set common build options
 
 # add_custom_command(
