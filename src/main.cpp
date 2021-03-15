@@ -28,9 +28,9 @@
 #include <cstdio>
 #include <iostream>
 
-bool         update_animation = true;
-unsigned int render_cycle     = 1;        // 0=Render everything, 1=Render character only, 2=Render skeleton only
-int          focused_bone     = 0;
+static bool         update_animation = true;
+static unsigned int render_cycle     = 1;        // 0=Render everything, 1=Render character only, 2=Render skeleton only
+static int          focused_bone     = 0;
 
 void key(GLFWwindow *window, int k, int s, int action, int mods)
 {
@@ -152,6 +152,7 @@ class VulkanApplication
 		while (!glfwWindowShouldClose(this->m_window))
 		{
 			glfwPollEvents();
+			this->m_context->draw_frame();
 		}
 	}
 

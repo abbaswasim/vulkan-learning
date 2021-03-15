@@ -75,14 +75,17 @@ target_include_directories(${VULKANED_NAME} PUBLIC ${VULKANED_SYMBOLS_SOURCE_DIR
 
 find_package(Vulkan) # Has to be Vulkan not vulkan (CMAKE seems to case sensitive for this on Linux)
 
-set(VULKANED_REQUIRED_LIBRARIES
+set(VULKANED_REQUIRED_LIBRARIES_SYSTEM
   vulkan_headers
   Vulkan::Vulkan
   glfw
-  dl
   roar)
 
+set(VULKANED_REQUIRED_LIBRARIES
+  dl)
+
 target_link_libraries(${VULKANED_NAME} PRIVATE ${VULKANED_REQUIRED_LIBRARIES})
+target_link_libraries_system(${VULKANED_NAME} PRIVATE ${VULKANED_REQUIRED_LIBRARIES_SYSTEM})
 
 if (USE_VOLK_INSTEAD)
   target_compile_definitions(${VULKANED_NAME}
