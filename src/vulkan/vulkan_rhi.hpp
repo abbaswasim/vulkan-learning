@@ -36,38 +36,8 @@
 #include <type_traits>
 #include <typeindex>
 
-// From Vulkan Samples project
-#if defined(__clang__)
-// CLANG ENABLE/DISABLE WARNING DEFINITION
-#	define VKBP_DISABLE_WARNINGS()                             \
-		_Pragma("clang diagnostic push")                        \
-			_Pragma("clang diagnostic ignored \"-Wall\"")       \
-				_Pragma("clang diagnostic ignored \"-Wextra\"") \
-					_Pragma("clang diagnostic ignored \"-Wtautological-compare\"")
-#	define VKBP_ENABLE_WARNINGS() \
-		_Pragma("clang diagnostic pop")
-#elif defined(__GNUC__) || defined(__GNUG__)
-// GCC ENABLE/DISABLE WARNING DEFINITION
-#	define VKBP_DISABLE_WARNINGS()                             \
-		_Pragma("GCC diagnostic push")                          \
-			_Pragma("GCC diagnostic ignored \"-Wall\"")         \
-				_Pragma("clang diagnostic ignored \"-Wextra\"") \
-					_Pragma("clang diagnostic ignored \"-Wtautological-compare\"")
-#	define VKBP_ENABLE_WARNINGS() \
-		_Pragma("GCC diagnostic pop")
-#elif defined(_MSC_VER)
-// MSVC ENABLE/DISABLE WARNING DEFINITION
-#	define VKBP_DISABLE_WARNINGS() \
-		__pragma(warning(push, 0))
-
-#	define VKBP_ENABLE_WARNINGS() \
-		__pragma(warning(pop))
-#endif
-
-VKBP_DISABLE_WARNINGS();
 #include "profiling/rorlog.hpp"
 #include "roar.hpp"
-VKBP_ENABLE_WARNINGS();
 
 // TODO:: This bit should be in CMakeLists.txt somewhere
 #if defined __APPLE__
@@ -338,8 +308,10 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vk_debug_generic_callback(
 	{
 		case VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT:
 			prefix = "performance";
+			break;
 		case VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT:
 			prefix = "validation";
+			break;
 		default:        // VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT:
 			prefix = "general";
 	}
