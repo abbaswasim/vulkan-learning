@@ -89,21 +89,6 @@ void key(GLFWwindow *window, int k, int s, int action, int mods)
 	}
 }
 
-void resize_vulkan(int, int)
-{}
-
-void resize(GLFWwindow *window, int width, int height)
-{
-	if (width == 0 || height == 0)
-		return;
-
-	int width_, height_;
-
-	glfwGetFramebufferSize(window, &width_, &height_);
-
-	resize_vulkan(width, height);
-}
-
 class VulkanApplication
 {
   public:
@@ -115,6 +100,16 @@ class VulkanApplication
 	}
 
   private:
+	static void resize(GLFWwindow *window, int width, int height)
+	{
+		if (width == 0 || height == 0)
+			return;
+
+		auto *app = static_cast<VulkanApplication *>(glfwGetWindowUserPointer(window));
+
+		app->m_context->resize();
+	}
+
 	void init()
 	{
 		if (!glfwInit())
@@ -143,6 +138,9 @@ class VulkanApplication
 
 		glfwSetKeyCallback(this->m_window, key);
 		glfwSetWindowSizeCallback(this->m_window, resize);
+
+		// Lets use this as a user pointer in glfw
+		glfwSetWindowUserPointer(this->m_window, this);
 
 		this->m_context = new vkd::Context(this->m_window);
 	}

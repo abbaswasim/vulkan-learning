@@ -822,16 +822,19 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	FORCE_INLINE PhysicalDevice &operator=(PhysicalDevice &&a_other) noexcept = default;        //! Move assignment operator
 	FORCE_INLINE virtual ~PhysicalDevice() noexcept
 	{
+		this->cleanup();
+	}
+
+	void cleanup()
+	{
 		// Wait for stuff to finish before deleting
 		vkDeviceWaitIdle(this->m_device);
 
 		this->destroy_sync_object();
+
+		this->cleanup_swapchain();
+
 		this->destroy_command_pool();
-		this->destroy_framebuffers();
-		this->destroy_render_pass();
-		this->destroy_graphics_pipeline();
-		this->destroy_imageviews();
-		this->destroy_swapchain();
 		this->destory_surface();
 		this->destroy_device();
 	}
@@ -885,7 +888,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		submitInfo.pWaitSemaphores            = waitSemaphores;
 		submitInfo.pWaitDstStageMask          = waitStages;
 		submitInfo.commandBufferCount         = 1;
-		submitInfo.pCommandBuffers            = &m_command_buffers[image_index];
+		submitInfo.pCommandBuffers            = &this->m_command_buffers[image_index];
 
 		VkSemaphore signalSemaphores[]  = {m_render_finished_semaphore[this->m_current_frame]};
 		submitInfo.signalSemaphoreCount = 1;
@@ -924,6 +927,21 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		vkQueuePresentKHR(this->m_present_queue, &presentInfo);
 
 		this->m_current_frame = (this->m_current_frame + 1) % cfg::get_number_of_buffers();
+	}
+
+	void recreate_swapchain()
+	{
+		return;
+		vkDeviceWaitIdle(this->m_device);
+
+		this->create_swapchain();
+		this->create_imageviews();
+		this->create_render_pass();
+		this->create_graphics_pipeline();
+		this->create_framebuffers();
+		this->create_command_buffers();
+
+		this->record_command_buffers();
 	}
 
   protected:
@@ -1592,6 +1610,22 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->m_swapchain = nullptr;
 	}
 
+	void cleanup_swapchain()
+	{
+		this->destroy_framebuffers();
+
+		vkFreeCommandBuffers(this->m_device, this->m_command_pool, static_cast<uint32_t>(this->m_command_buffers.size()), this->m_command_buffers.data());
+		this->m_command_buffers.clear();
+
+		// This one is never needed because pipeline is destroyed at creation time
+		// vkDestroyPipelineLayout(this->m_device, this->m_pipeline_layout, cfg::VkAllocator);
+
+		this->destroy_render_pass();
+		this->destroy_graphics_pipeline();
+		this->destroy_imageviews();
+		this->destroy_swapchain();
+	}
+
 	void create_imageviews()
 	{
 		// Creating an image view for all swapchain images
@@ -1679,6 +1713,11 @@ class Context
 	FORCE_INLINE virtual ~Context() noexcept                    = default;        //! Destructor
 
 	virtual void temp();
+
+	void resize()
+	{
+		this->m_gpus[this->m_current_gpu]->recreate_swapchain();
+	}
 
 	FORCE_INLINE Context(GLFWwindow *a_window)
 	{
