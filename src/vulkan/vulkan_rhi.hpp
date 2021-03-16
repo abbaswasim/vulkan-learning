@@ -931,8 +931,9 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 	void recreate_swapchain()
 	{
-		return;
 		vkDeviceWaitIdle(this->m_device);
+
+		this->cleanup_swapchain();
 
 		this->create_swapchain();
 		this->create_imageviews();
