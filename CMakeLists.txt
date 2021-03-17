@@ -30,6 +30,7 @@ list(APPEND CMAKE_MESSAGE_CONTEXT Vulkaned_Engine)
 
 set(VULKANED_NAME VulkanEd)
 
+# TODO: Remove absolute paths
 if (USE_VOLK_INSTEAD)
   set(VULKANED_SYMBOLS_SOURCE_DIR /development/volk)
   set(VULKANED_SYMBOLS_SOURCE_FILE ${VULKANED_SYMBOLS_SOURCE_DIR}/volk.c)
@@ -42,7 +43,7 @@ endif()
 set(VULKANED_ROOT_DIR ${CMAKE_CURRENT_LIST_DIR}) # Always prefer the _LIST_ version FILES/DIRS instead of the _SOURCE_
 set(VULKANED_SOURCE_DIR ${VULKANED_ROOT_DIR}/src)
 
-include(${VULKANED_ROOT_DIR}/build.cmake)
+include(${VULKANED_ROOT_DIR}/thirdparty/roar/build.cmake)
 
 # Always generate compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
@@ -78,6 +79,7 @@ find_package(Vulkan) # Has to be Vulkan not vulkan (CMAKE seems to case sensitiv
 set(VULKANED_REQUIRED_LIBRARIES_SYSTEM
   vulkan_headers
   Vulkan::Vulkan
+  cimage
   glfw
   roar)
 
