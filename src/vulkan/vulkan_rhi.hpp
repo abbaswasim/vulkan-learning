@@ -39,6 +39,8 @@
 #include "profiling/rorlog.hpp"
 #include "roar.hpp"
 
+#include <CImg.h>
+
 // TODO:: This bit should be in CMakeLists.txt somewhere
 #if defined __APPLE__
 #	define VK_USE_PLATFORM_METAL_EXT
@@ -79,6 +81,36 @@ FORCE_INLINE std::string get_engine_name()         { return "VulkanEd Engine";}
 FORCE_INLINE uint32_t    get_engine_version()      { return CFG_VK_MAKE_VERSION(1, 0, 0);}
 FORCE_INLINE uint32_t    get_api_version()         { return CFG_VK_MAKE_VERSION(1, 1, 0);} // TODO: Try 1.2 on Linux
 // clang-format on
+
+void read_texture_from_file(const char *a_file_name, unsigned char **a_data, unsigned int &a_width, unsigned int &a_height, unsigned int &a_bpp)
+{
+	cimg_library::CImg<unsigned char> src(a_file_name);
+	// src.save("boy_10.ppm");
+
+	unsigned int width  = static_cast<uint32_t>(src.width());
+	unsigned int height = static_cast<uint32_t>(src.height());
+	unsigned int bpp    = static_cast<uint32_t>(src.spectrum());
+
+	a_width  = width;
+	a_height = height;
+	a_bpp    = bpp;
+
+	unsigned char *ptr = src.data();
+
+	unsigned int size = width * height;
+
+	unsigned char *mixed = new unsigned char[size * bpp];
+
+	for (unsigned int i = 0; i < size; i++)
+	{
+		for (unsigned int j = 0; j < bpp; j++)
+		{
+			mixed[(i * bpp) + j] = ptr[i + (j * size)];
+		}
+	}
+
+	*a_data = mixed;
+}
 
 FORCE_INLINE std::vector<const char *> get_instance_extensions_requested()
 {
@@ -868,7 +900,17 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		vkWaitForFences(this->m_device, 1, &this->m_queue_fence[this->m_current_frame], VK_TRUE, UINT64_MAX);
 
 		uint32_t image_index;
-		vkAcquireNextImageKHR(this->m_device, this->m_swapchain, UINT64_MAX, this->m_image_available_semaphore[this->m_current_frame], VK_NULL_HANDLE, &image_index);
+		VkResult swapchain_res = vkAcquireNextImageKHR(this->m_device, this->m_swapchain, UINT64_MAX, this->m_image_available_semaphore[this->m_current_frame], VK_NULL_HANDLE, &image_index);
+
+		if (swapchain_res == VK_ERROR_OUT_OF_DATE_KHR)
+		{
+			assert(0 && "This should never happen");
+			this->recreate_swapchain();
+		}
+		else if (swapchain_res != VK_SUCCESS && swapchain_res != VK_SUBOPTIMAL_KHR)
+		{
+			throw std::runtime_error("Acquire Next image failed or its suboptimal!");
+		}
 
 		// Check if a previous frame is using this image (i.e. there is its fence to wait on)
 		if (this->m_queue_fence_in_flight[image_index] != VK_NULL_HANDLE)
@@ -924,7 +966,17 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		presentInfo.pImageIndices   = &image_index;
 		presentInfo.pResults        = nullptr;        // Optional
 
-		vkQueuePresentKHR(this->m_present_queue, &presentInfo);
+		swapchain_res = vkQueuePresentKHR(this->m_present_queue, &presentInfo);
+
+		if (swapchain_res == VK_ERROR_OUT_OF_DATE_KHR || swapchain_res == VK_SUBOPTIMAL_KHR)
+		{
+			assert(0 && "This should never happen");
+			this->recreate_swapchain();
+		}
+		else if (swapchain_res != VK_SUCCESS)
+		{
+			throw std::runtime_error("Failed to present swapchain image!");
+		}
 
 		this->m_current_frame = (this->m_current_frame + 1) % cfg::get_number_of_buffers();
 	}
@@ -932,6 +984,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	void recreate_swapchain()
 	{
 		vkDeviceWaitIdle(this->m_device);
+		// vkQueueWaitIdle(this->m_graphics_queue);
 
 		this->cleanup_swapchain();
 
@@ -1613,13 +1666,12 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 	void cleanup_swapchain()
 	{
+		// TODO: Expolore how does the 'oldSwapChain' argument works to be more efficient
 		this->destroy_framebuffers();
 
+		// Rather than destroying command pool we are destroying command buffers themselves, TODO: I thought clearing the pool was faster
 		vkFreeCommandBuffers(this->m_device, this->m_command_pool, static_cast<uint32_t>(this->m_command_buffers.size()), this->m_command_buffers.data());
 		this->m_command_buffers.clear();
-
-		// This one is never needed because pipeline is destroyed at creation time
-		// vkDestroyPipelineLayout(this->m_device, this->m_pipeline_layout, cfg::VkAllocator);
 
 		this->destroy_render_pass();
 		this->destroy_graphics_pipeline();
@@ -1717,6 +1769,8 @@ class Context
 
 	void resize()
 	{
+		// Do a proactive recreate of swapchain instead of waiting for error messages
+		// TODO: Try to understand why the resize is rigid, as in while resizing the contents don't update even though resize is called multiple times
 		this->m_gpus[this->m_current_gpu]->recreate_swapchain();
 	}
 
