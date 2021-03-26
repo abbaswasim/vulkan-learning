@@ -28,6 +28,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <foundation/rortypes.hpp>
 #include <fstream>
 #include <ios>
 #include <iostream>
@@ -41,24 +42,7 @@
 
 #include <CImg.h>
 
-// TODO:: This bit should be in CMakeLists.txt somewhere
-#if defined __APPLE__
-#	define VK_USE_PLATFORM_METAL_EXT
-#elif defined __linux__
-#	define VK_USE_PLATFORM_XCB_KHR
-#endif
-
-// #define USE_VOLK_INSTEAD
-
-#if defined(USE_VOLK_INSTEAD)
-#	define VK_ENABLE_BETA_EXTENSIONS
-#	include "volk.h"
-#else
-#	include "vusym.hpp"
-#endif
-
-// #define GLFW_INCLUDE_VULKAN // Not required if vulkan.h included before this
-#include <GLFW/glfw3.h>
+#include "vulkan_astro_boy.hpp"
 
 #define VULKANED_USE_GLFW 1
 
@@ -862,6 +846,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		// Wait for stuff to finish before deleting
 		vkDeviceWaitIdle(this->m_device);
 
+		this->destroy_buffers();
+
 		this->destroy_sync_object();
 
 		this->cleanup_swapchain();
@@ -921,24 +907,24 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		// Mark the image as now being in use by this frame
 		this->m_queue_fence_in_flight[image_index] = this->m_queue_fence[this->m_current_frame];
 
-		VkSubmitInfo submitInfo{};
-		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		VkSubmitInfo submit_info{};
+		submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 
 		VkSemaphore          waitSemaphores[] = {this->m_image_available_semaphore[this->m_current_frame]};
 		VkPipelineStageFlags waitStages[]     = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
-		submitInfo.waitSemaphoreCount         = 1;
-		submitInfo.pWaitSemaphores            = waitSemaphores;
-		submitInfo.pWaitDstStageMask          = waitStages;
-		submitInfo.commandBufferCount         = 1;
-		submitInfo.pCommandBuffers            = &this->m_command_buffers[image_index];
+		submit_info.waitSemaphoreCount        = 1;
+		submit_info.pWaitSemaphores           = waitSemaphores;
+		submit_info.pWaitDstStageMask         = waitStages;
+		submit_info.commandBufferCount        = 1;
+		submit_info.pCommandBuffers           = &this->m_command_buffers[image_index];
 
-		VkSemaphore signalSemaphores[]  = {m_render_finished_semaphore[this->m_current_frame]};
-		submitInfo.signalSemaphoreCount = 1;
-		submitInfo.pSignalSemaphores    = signalSemaphores;
+		VkSemaphore signalSemaphores[]   = {m_render_finished_semaphore[this->m_current_frame]};
+		submit_info.signalSemaphoreCount = 1;
+		submit_info.pSignalSemaphores    = signalSemaphores;
 
 		vkResetFences(this->m_device, 1, &this->m_queue_fence[this->m_current_frame]);
 
-		if (vkQueueSubmit(this->m_graphics_queue, 1, &submitInfo, this->m_queue_fence[this->m_current_frame]) != VK_SUCCESS)
+		if (vkQueueSubmit(this->m_graphics_queue, 1, &submit_info, this->m_queue_fence[this->m_current_frame]) != VK_SUCCESS)
 		{
 			throw std::runtime_error("failed to submit draw command buffer!");
 		}
@@ -1070,7 +1056,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		device_create_info.ppEnabledLayerNames     = layers.data();
 		device_create_info.enabledExtensionCount   = utl::static_cast_safe<uint32_t>(extensions.size());
 		device_create_info.ppEnabledExtensionNames = extensions.data();
-		device_create_info.pEnabledFeatures        = &this->m_physical_device_features;
+		// device_create_info.pEnabledFeatures        = &this->m_physical_device_features;
+		device_create_info.pEnabledFeatures = nullptr;
 
 		auto result = vkCreateDevice(this->m_physical_device, &device_create_info, cfg::VkAllocator, &this->m_device);
 		assert(result == VK_SUCCESS);
@@ -1377,14 +1364,19 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 		// This is where you add where the vertex data is coming from
 		// TODO: To be abstracted later so it can be configured properly
+		auto vertex_attribute_descriptions = utl::get_astro_boy_vertex_attributes();
+		auto vertex_attribute_bindings     = utl::get_astro_boy_vertex_bindings();
+
 		VkPipelineVertexInputStateCreateInfo pipeline_vertex_input_state_info = {};
 		pipeline_vertex_input_state_info.sType                                = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
 		pipeline_vertex_input_state_info.pNext                                = nullptr;
 		pipeline_vertex_input_state_info.flags                                = 0;
-		pipeline_vertex_input_state_info.vertexBindingDescriptionCount        = 0;
-		pipeline_vertex_input_state_info.pVertexBindingDescriptions           = nullptr;        // Optional
-		pipeline_vertex_input_state_info.vertexAttributeDescriptionCount      = 0;
-		pipeline_vertex_input_state_info.pVertexAttributeDescriptions         = nullptr;        // Optional
+		pipeline_vertex_input_state_info.vertexBindingDescriptionCount        = vertex_attribute_bindings.size();
+		pipeline_vertex_input_state_info.pVertexBindingDescriptions           = vertex_attribute_bindings.data();
+		pipeline_vertex_input_state_info.vertexAttributeDescriptionCount      = vertex_attribute_descriptions.size();
+		pipeline_vertex_input_state_info.pVertexAttributeDescriptions         = vertex_attribute_descriptions.data();
+
+		this->create_buffers();
 
 		VkPipelineInputAssemblyStateCreateInfo pipeline_input_assembly_info = {};
 		pipeline_input_assembly_info.sType                                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
@@ -1591,7 +1583,26 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			vkCmdBindPipeline(current_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, this->m_graphics_pipeline);
 			vkCmdSetViewport(current_command_buffer, 0, 1, &viewport);
 
-			vkCmdDraw(current_command_buffer, 3, 1, 0, 0);
+			VkBuffer vertexBuffers[] = {this->m_vertex_buffers[0],
+										this->m_vertex_buffers[1],
+										this->m_vertex_buffers[1],
+										this->m_vertex_buffers[1],
+										this->m_vertex_buffers[1]};
+
+			VkDeviceSize offsets[] = {astro_boy_positions_array_count * 0,
+									  astro_boy_normals_array_count * 0,
+									  astro_boy_uvs_array_count * sizeof(float32_t),
+									  astro_boy_weights_array_count * sizeof(float32_t),
+									  astro_boy_joints_array_count * sizeof(float32_t)};
+
+			vkCmdBindVertexBuffers(current_command_buffer, 0, 5, vertexBuffers, offsets);
+
+			vkCmdBindIndexBuffer(current_command_buffer, this->m_index_buffer, 0, VK_INDEX_TYPE_UINT32);
+
+			// vkCmdDraw(current_command_buffer, static_cast<uint32_t>(astro_boy_indices_array_count), 1, 0, 0);
+			vkCmdDrawIndexed(current_command_buffer, astro_boy_indices_array_count, 1, 0, 0, 0);
+
+			// vkCmdDraw(current_command_buffer, 3, 1, 0, 0);
 			vkCmdEndRenderPass(current_command_buffer);
 
 			result = vkEndCommandBuffer(current_command_buffer);
@@ -1650,6 +1661,119 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 		VkResult result = vkCreateRenderPass(this->m_device, &render_pass_info, cfg::VkAllocator, &this->m_render_pass);
 		assert(result == VK_SUCCESS);
+	}
+
+	uint32_t find_memory_type(uint32_t a_type_filter, VkMemoryPropertyFlags a_properties)
+	{
+		VkPhysicalDeviceMemoryProperties memory_properties{};
+		vkGetPhysicalDeviceMemoryProperties(this->m_physical_device, &memory_properties);
+
+		for (uint32_t i = 0; i < memory_properties.memoryTypeCount; i++)
+		{
+			if (a_type_filter & (1 << i) && ((memory_properties.memoryTypes[i].propertyFlags & a_properties) == a_properties))
+			{
+				return i;
+			}
+		}
+
+		throw std::runtime_error("Failed to find suitable memory type!");
+	}
+
+	auto allocate_memory(VkBuffer a_buffer)
+	{
+		VkMemoryRequirements buffer_mem_req{};
+		vkGetBufferMemoryRequirements(this->m_device, a_buffer, &buffer_mem_req);
+
+		VkDeviceMemory buffer_memory;
+
+		VkMemoryAllocateInfo allocation_info{};
+		allocation_info.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+		allocation_info.allocationSize  = buffer_mem_req.size;
+		allocation_info.memoryTypeIndex = find_memory_type(buffer_mem_req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		allocation_info.pNext           = nullptr;
+
+		VkResult result = vkAllocateMemory(this->m_device, &allocation_info, cfg::VkAllocator, &buffer_memory);
+		assert(result == VK_SUCCESS && "Failed to allocate vulkan buffer memory!");
+		assert(buffer_memory);
+
+		result = vkBindBufferMemory(this->m_device, a_buffer, buffer_memory, 0);
+		assert(result == VK_SUCCESS && "Failed to bind vulkan buffer memory!");
+
+		return buffer_memory;
+	}
+
+	VkBuffer create_buffer(size_t a_size, VkBufferUsageFlags a_usage)
+	{
+		VkBufferCreateInfo buffer_info{};
+
+		buffer_info.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+		buffer_info.pNext                 = nullptr;
+		buffer_info.flags                 = 0;
+		buffer_info.size                  = a_size;         // 1024 * 1024 * 2;        // 2kb
+		buffer_info.usage                 = a_usage;        // VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+		buffer_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
+		buffer_info.queueFamilyIndexCount = 0;
+		buffer_info.pQueueFamilyIndices   = nullptr;
+
+		VkBuffer buffer;
+		VkResult result = vkCreateBuffer(this->m_device, &buffer_info, cfg::VkAllocator, &buffer);
+
+		assert(result == VK_SUCCESS && "Failed to create vulkan buffer!");
+		assert(buffer);
+
+		return buffer;
+	}
+
+	void create_buffers()
+	{
+		this->m_vertex_buffers[0] = this->create_buffer(1024 * 1024 * 50, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);         // 50KiB
+		this->m_vertex_buffers[1] = this->create_buffer(1024 * 1024 * 150, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);        // 150KiB
+		this->m_index_buffer      = this->create_buffer(1024 * 1024 * 60, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);          // 60KiB
+
+		this->m_vertex_buffer_memory[0] = this->allocate_memory(this->m_vertex_buffers[0]);
+		this->m_vertex_buffer_memory[1] = this->allocate_memory(this->m_vertex_buffers[1]);
+		this->m_index_buffer_memory     = this->allocate_memory(this->m_index_buffer);
+
+		void *position_data;
+		vkMapMemory(this->m_device, this->m_vertex_buffer_memory[0], 0, VK_WHOLE_SIZE, 0, &position_data);
+		memcpy(position_data, astro_boy_positions, astro_boy_positions_array_count * sizeof(float32_t));        // Positions
+		vkUnmapMemory(this->m_device, this->m_vertex_buffer_memory[0]);
+
+		void *non_position_data;
+		vkMapMemory(this->m_device, this->m_vertex_buffer_memory[1], 0, VK_WHOLE_SIZE, 0, &non_position_data);
+		memcpy(non_position_data, astro_boy_normals, astro_boy_normals_array_count * sizeof(float32_t));        // Normals
+
+		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + astro_boy_normals_array_count * sizeof(float32_t);
+		memcpy(non_position_data, astro_boy_uvs, astro_boy_uvs_array_count * sizeof(float32_t));        // UVs
+
+		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + astro_boy_uvs_array_count * sizeof(float32_t);
+		memcpy(non_position_data, astro_boy_weights, astro_boy_weights_array_count * sizeof(float32_t));        // Weights
+
+		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + astro_boy_weights_array_count * sizeof(float32_t);
+		memcpy(non_position_data, astro_boy_joints, astro_boy_joints_array_count * sizeof(float32_t));        // JoinIds
+
+		vkUnmapMemory(this->m_device, this->m_vertex_buffer_memory[1]);
+
+		void *index_data;
+		vkMapMemory(this->m_device, this->m_index_buffer_memory, 0, VK_WHOLE_SIZE, 0, &index_data);
+		memcpy(index_data, astro_boy_indices, astro_boy_indices_array_count * sizeof(uint32_t));        // Indices
+
+		vkUnmapMemory(this->m_device, this->m_index_buffer_memory);
+	}
+
+	void destroy_buffers()
+	{
+		vkDestroyBuffer(this->m_device, this->m_vertex_buffers[0], cfg::VkAllocator);
+		vkDestroyBuffer(this->m_device, this->m_vertex_buffers[1], cfg::VkAllocator);
+		vkDestroyBuffer(this->m_device, this->m_index_buffer, cfg::VkAllocator);
+
+		vkFreeMemory(this->m_device, this->m_vertex_buffer_memory[0], cfg::VkAllocator);
+		vkFreeMemory(this->m_device, this->m_vertex_buffer_memory[1], cfg::VkAllocator);
+		vkFreeMemory(this->m_device, this->m_index_buffer_memory, cfg::VkAllocator);
+
+		this->m_vertex_buffers[0] = nullptr;
+		this->m_vertex_buffers[1] = nullptr;
+		this->m_index_buffer      = nullptr;
 	}
 
 	void destroy_render_pass()
@@ -1751,7 +1875,11 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	VkFence                      m_queue_fence[cfg::get_number_of_buffers()];
 	VkFence                      m_queue_fence_in_flight[cfg::get_number_of_buffers()];
 	uint32_t                     m_current_frame{0};
-};
+	VkBuffer                     m_vertex_buffers[2];                   // Temporary buffers for Astro_boy geometry
+	VkBuffer                     m_index_buffer{nullptr};               // Temporary buffers for Astro_boy geometry
+	VkDeviceMemory               m_vertex_buffer_memory[2];             // Temporary vertex memory buffers for Astro_boy geometry
+	VkDeviceMemory               m_index_buffer_memory{nullptr};        // Temporary index memory buffers for Astro_boy geometry
+};                                                                      // namespace vkd
 
 void PhysicalDevice::temp()
 {}
