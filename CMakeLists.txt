@@ -51,7 +51,6 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS 1)
 add_subdirectory(${VULKANED_ROOT_DIR}/thirdparty)
 add_subdirectory(${VULKANED_SOURCE_DIR})
 
-
 set(VULKANED_HEADERS
   ${VULKANED_SOURCE_DIR}/dummy.hpp)
 

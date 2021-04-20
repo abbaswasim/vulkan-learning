@@ -40,7 +40,8 @@
 #include "profiling/rorlog.hpp"
 #include "roar.hpp"
 
-#include <CImg.h>
+#define cimg_display 0
+#include <CImg/CImg.h>
 
 #include "vulkan_astro_boy.hpp"
 
@@ -332,7 +333,6 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vk_debug_generic_callback(
 			prefix = "general";
 	}
 
-	// TODO: Make sure of the rest of the a_callback_data, there is useful stuff in there for organising the message properly
 	if (a_message_severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT)
 		ror::log_error("Validation layer {} error: {}", prefix, a_callback_data->pMessage);
 	else if (a_message_severity >= VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT)
@@ -872,6 +872,9 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		// Create pipeline etc, to be cleaned out later
 		this->create_render_pass();
 		this->create_graphics_pipeline();
+
+		this->create_buffers();
+
 		this->create_framebuffers();
 		this->create_command_pool();
 		this->create_command_buffers();
@@ -1375,8 +1378,6 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		pipeline_vertex_input_state_info.pVertexBindingDescriptions           = vertex_attribute_bindings.data();
 		pipeline_vertex_input_state_info.vertexAttributeDescriptionCount      = vertex_attribute_descriptions.size();
 		pipeline_vertex_input_state_info.pVertexAttributeDescriptions         = vertex_attribute_descriptions.data();
-
-		this->create_buffers();
 
 		VkPipelineInputAssemblyStateCreateInfo pipeline_input_assembly_info = {};
 		pipeline_input_assembly_info.sType                                  = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
