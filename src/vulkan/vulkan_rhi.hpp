@@ -67,7 +67,7 @@ FORCE_INLINE uint32_t    get_engine_version()      { return CFG_VK_MAKE_VERSION(
 FORCE_INLINE uint32_t    get_api_version()         { return CFG_VK_MAKE_VERSION(1, 1, 0);} // TODO: Try 1.2 on Linux
 // clang-format on
 
-void read_texture_from_file(const char *a_file_name, unsigned char **a_data, unsigned int &a_width, unsigned int &a_height, unsigned int &a_bpp)
+inline void read_texture_from_file(const char *a_file_name, unsigned char **a_data, unsigned int &a_width, unsigned int &a_height, unsigned int &a_bpp)
 {
 	cimg_library::CImg<unsigned char> src(a_file_name);
 	// src.save("boy_10.ppm");
@@ -199,7 +199,7 @@ FORCE_INLINE _type_to static_cast_safe(_type_from a_value)
 }
 
 // Loads data at sizeof(uint32_t) aligned address
-bool align_load_file(const std::string &a_file_path, char **a_buffer, size_t &a_bytes_read)
+inline bool align_load_file(const std::string &a_file_path, char **a_buffer, size_t &a_bytes_read)
 {
 	std::ifstream file(a_file_path, std::ios::in | std::ios::ate | std::ios::binary);
 
@@ -289,7 +289,7 @@ FORCE_INLINE auto get_swapchain_sharing_mode(uint32_t a_queue_family_indices[2])
 	return create_info;
 }
 
-void glfw_create_surface(VkInstance &a_instance, VkSurfaceKHR &a_surface, GLFWwindow *a_window)
+inline void glfw_create_surface(VkInstance &a_instance, VkSurfaceKHR &a_surface, GLFWwindow *a_window)
 {
 	assert(a_instance);
 	assert(a_window);
@@ -300,7 +300,7 @@ void glfw_create_surface(VkInstance &a_instance, VkSurfaceKHR &a_surface, GLFWwi
 		ror::log_critical("WARNING! Window surface creation failed");
 }
 
-auto glfw_get_buffer_size(GLFWwindow *a_window)
+inline auto glfw_get_buffer_size(GLFWwindow *a_window)
 {
 	assert(a_window);
 
@@ -542,10 +542,8 @@ struct QueueData
 	std::vector<std::pair<uint32_t, uint32_t>> m_indicies{};
 };
 
-// Assumes the queue already has a_queue_flag available
-
-// a_others can only be one flag for this function
-auto get_dedicated_queue_family(std::vector<VkQueueFamilyProperties> &a_queue_families, VkQueueFlags a_queue_flag, VkQueueFlags a_others, uint32_t &a_index)
+// a_others is the exclusion list I don't want in this family
+inline auto get_dedicated_queue_family(std::vector<VkQueueFamilyProperties> &a_queue_families, VkQueueFlags a_queue_flag, VkQueueFlags a_others, uint32_t &a_index)
 {
 	uint32_t index = 0;
 	for (auto &queue_family : a_queue_families)
@@ -564,7 +562,7 @@ auto get_dedicated_queue_family(std::vector<VkQueueFamilyProperties> &a_queue_fa
 }
 
 // TODO: Extract out
-auto get_priority(VkQueueFlags a_flag)
+inline auto get_priority(VkQueueFlags a_flag)
 {
 	if (a_flag & VK_QUEUE_GRAPHICS_BIT)
 		return 0.75f;
@@ -580,7 +578,7 @@ auto get_priority(VkQueueFlags a_flag)
 	return 0.0f;
 }
 
-auto get_queue_indices(VkPhysicalDevice a_physical_device, VkSurfaceKHR a_surface, std::vector<float32_t *> &a_priorities_pointers, QueueData &a_queue_data)
+inline auto get_queue_indices(VkPhysicalDevice a_physical_device, VkSurfaceKHR a_surface, std::vector<float32_t *> &a_priorities_pointers, QueueData &a_queue_data)
 {
 	auto queue_families = enumerate_general_property<VkQueueFamilyProperties, false>(vkGetPhysicalDeviceQueueFamilyProperties, a_physical_device);
 
@@ -619,14 +617,21 @@ auto get_queue_indices(VkPhysicalDevice a_physical_device, VkSurfaceKHR a_surfac
 		assert(found_indices[compute_index].first && "No compute queue found can't continue!");
 	}
 
-	found_indices[transfer_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_COMPUTE_BIT, found_indices[transfer_index].second);
+	// Look for a queue that has transfer but no compute or graphics
+	found_indices[transfer_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_COMPUTE_BIT | VK_QUEUE_GRAPHICS_BIT, found_indices[transfer_index].second);
 
 	if (!found_indices[transfer_index].first)
 	{
-		// Get the first one that supports transfer, quite possible the one with Graphics
-		found_indices[transfer_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, static_cast<uint32_t>(~VK_QUEUE_COMPUTE_BIT), found_indices[transfer_index].second);
+		// Look for a queue that has transfer but no compute
+		found_indices[transfer_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, VK_QUEUE_COMPUTE_BIT, found_indices[transfer_index].second);
 		if (!found_indices[transfer_index].first)
-			found_indices[transfer_index].second = found_indices[graphics_index].second;
+		{
+			// Get the first one that supports transfer, quite possible the one with Graphics
+			found_indices[transfer_index].first = get_dedicated_queue_family(queue_families, VK_QUEUE_TRANSFER_BIT, static_cast<uint32_t>(~VK_QUEUE_TRANSFER_BIT), found_indices[transfer_index].second);
+			// If still can't find one just use the graphics queue
+			if (!found_indices[transfer_index].first)
+				found_indices[transfer_index].second = found_indices[graphics_index].second;
+		}
 	}
 
 	found_indices[sparse_index].first    = get_dedicated_queue_family(queue_families, VK_QUEUE_SPARSE_BINDING_BIT, static_cast<uint32_t>(~VK_QUEUE_SPARSE_BINDING_BIT), found_indices[sparse_index].second);
@@ -743,7 +748,7 @@ class Instance : public VulkanObject<VkInstance>
 	FORCE_INLINE Instance(Instance &&a_other) noexcept = default;                   //! Move constructor
 	FORCE_INLINE Instance &operator=(const Instance &a_other) = default;            //! Copy assignment operator
 	FORCE_INLINE Instance &operator=(Instance &&a_other) noexcept = default;        //! Move assignment operator
-	FORCE_INLINE virtual ~Instance()
+	FORCE_INLINE virtual ~Instance() noexcept override
 	{
 		vkDestroyDebugUtilsMessengerEXT(this->get_handle(), this->m_messenger, cfg::VkAllocator);
 		this->m_messenger = nullptr;
@@ -836,7 +841,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	FORCE_INLINE PhysicalDevice(PhysicalDevice &&a_other) noexcept = default;                   //! Move constructor
 	FORCE_INLINE PhysicalDevice &operator=(const PhysicalDevice &a_other) = default;            //! Copy assignment operator
 	FORCE_INLINE PhysicalDevice &operator=(PhysicalDevice &&a_other) noexcept = default;        //! Move assignment operator
-	FORCE_INLINE virtual ~PhysicalDevice() noexcept
+	FORCE_INLINE virtual ~PhysicalDevice() noexcept override
 	{
 		this->cleanup();
 	}
@@ -1603,7 +1608,6 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			// vkCmdDraw(current_command_buffer, static_cast<uint32_t>(astro_boy_indices_array_count), 1, 0, 0);
 			vkCmdDrawIndexed(current_command_buffer, astro_boy_indices_array_count, 1, 0, 0, 0);
 
-			// vkCmdDraw(current_command_buffer, 3, 1, 0, 0);
 			vkCmdEndRenderPass(current_command_buffer);
 
 			result = vkEndCommandBuffer(current_command_buffer);
