@@ -860,7 +860,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 		this->cleanup_swapchain();
 
-		this->destroy_command_pool();
+		this->destroy_command_pools();
 		this->destory_surface();
 		this->destroy_device();
 	}
@@ -881,11 +881,11 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->create_render_pass();
 		this->create_graphics_pipeline();
 
-		this->create_vertex_buffers();
-
 		this->create_framebuffers();
-		this->create_command_pool();
+		this->create_command_pools();
 		this->create_command_buffers();
+
+		this->create_vertex_buffers();
 
 		this->record_command_buffers();
 
@@ -1274,7 +1274,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		}
 	}
 
-	void create_command_pool()
+	void create_command_pools()
 	{
 		VkCommandPoolCreateInfo command_pool_info = {};
 		command_pool_info.sType                   = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -1284,11 +1284,17 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 		VkResult result = vkCreateCommandPool(this->m_device, &command_pool_info, cfg::VkAllocator, &this->m_graphics_command_pool);
 		assert(result == VK_SUCCESS);
+
+		command_pool_info.queueFamilyIndex = this->m_transfer_queue_index;
+
+		result = vkCreateCommandPool(this->m_device, &command_pool_info, cfg::VkAllocator, &this->m_transfer_command_pool);
+		assert(result == VK_SUCCESS);
 	}
 
-	void destroy_command_pool()
+	void destroy_command_pools()
 	{
 		vkDestroyCommandPool(this->m_device, this->m_graphics_command_pool, cfg::VkAllocator);
+		vkDestroyCommandPool(this->m_device, this->m_transfer_command_pool, cfg::VkAllocator);
 	}
 
 	void create_command_buffers()
@@ -1741,41 +1747,122 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		return buffer;
 	}
 
+	void copy_from_staging_buffers(std::vector<std::pair<VkBuffer, size_t>> &a_source, std::vector<VkBuffer> &a_destination)
+	{
+		VkCommandBufferAllocateInfo command_buffer_allocate_info{};
+		command_buffer_allocate_info.sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+		command_buffer_allocate_info.pNext              = nullptr;
+		command_buffer_allocate_info.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+		command_buffer_allocate_info.commandPool        = this->m_transfer_command_pool;
+		command_buffer_allocate_info.commandBufferCount = 1;
+
+		VkCommandBuffer staging_command_buffer;
+		VkResult        result = vkAllocateCommandBuffers(this->m_device, &command_buffer_allocate_info, &staging_command_buffer);
+		assert(result == VK_SUCCESS);
+
+		VkCommandBufferBeginInfo command_buffer_begin_info{};
+		command_buffer_begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+		command_buffer_begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+		vkBeginCommandBuffer(staging_command_buffer, &command_buffer_begin_info);
+
+		if (a_source.size() != a_destination.size())
+			ror::log_critical("Copying from different size a_source to a_destination, something won't be copied correctly");
+
+		VkBufferCopy buffer_copy_region{};
+		buffer_copy_region.srcOffset = 0;        // Optional
+		buffer_copy_region.dstOffset = 0;        // Optional
+
+		for (size_t i = 0; i < a_source.size(); ++i)
+		{
+			buffer_copy_region.size = a_source[i].second;
+			vkCmdCopyBuffer(staging_command_buffer, a_source[i].first, a_destination[i], 1, &buffer_copy_region);
+		}
+		vkEndCommandBuffer(staging_command_buffer);
+
+		VkSubmitInfo staging_submit_info{};
+		staging_submit_info.sType              = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+		staging_submit_info.commandBufferCount = 1;
+		staging_submit_info.pCommandBuffers    = &staging_command_buffer;
+
+		vkQueueSubmit(this->m_transfer_queue, 1, &staging_submit_info, VK_NULL_HANDLE);
+		vkQueueWaitIdle(this->m_transfer_queue);        // TODO: Should be improved in the future
+
+		vkFreeCommandBuffers(this->m_device, this->m_transfer_command_pool, 1, &staging_command_buffer);
+	}
+
 	void create_vertex_buffers()
 	{
-		this->m_vertex_buffers[0] = this->create_buffer(1024 * 1024 * 50, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);         // 50KiB
-		this->m_vertex_buffers[1] = this->create_buffer(1024 * 1024 * 150, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);        // 150KiB
-		this->m_index_buffer      = this->create_buffer(1024 * 1024 * 60, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);          // 60KiB
+		size_t index_buffer_size         = astro_boy_indices_array_count * sizeof(uint32_t);
+		size_t positions_buffer_size     = astro_boy_positions_array_count * sizeof(float32_t);
+		size_t normals_buffer_size       = astro_boy_normals_array_count * sizeof(float32_t);
+		size_t uvs_buffer_size           = astro_boy_uvs_array_count * sizeof(float32_t);
+		size_t weights_buffer_size       = astro_boy_weights_array_count * sizeof(float32_t);
+		size_t joints_buffer_size        = astro_boy_joints_array_count * sizeof(int32_t);
+		size_t non_positions_buffer_size = normals_buffer_size + uvs_buffer_size + joints_buffer_size + weights_buffer_size;
 
-		this->m_vertex_buffer_memory[0] = this->allocate_bind_memory(this->m_vertex_buffers[0]);
-		this->m_vertex_buffer_memory[1] = this->allocate_bind_memory(this->m_vertex_buffers[1]);
-		this->m_index_buffer_memory     = this->allocate_bind_memory(this->m_index_buffer);
+		std::vector<std::pair<VkBuffer, size_t>> staging_buffers{};
+		std::vector<VkDeviceMemory>              staging_buffers_memory{};
+		staging_buffers.resize(3);
+		staging_buffers_memory.resize(3);
+
+		staging_buffers[0].first = this->create_buffer(positions_buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+		staging_buffers[1].first = this->create_buffer(non_positions_buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+		staging_buffers[2].first = this->create_buffer(index_buffer_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+
+		staging_buffers[0].second = positions_buffer_size;
+		staging_buffers[1].second = non_positions_buffer_size;
+		staging_buffers[2].second = index_buffer_size;
+
+		staging_buffers_memory[0] = this->allocate_bind_memory(staging_buffers[0].first);        // default of VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+		staging_buffers_memory[1] = this->allocate_bind_memory(staging_buffers[1].first);        // default of VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+		staging_buffers_memory[2] = this->allocate_bind_memory(staging_buffers[2].first);        // default of VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 
 		void *position_data;
-		vkMapMemory(this->m_device, this->m_vertex_buffer_memory[0], 0, VK_WHOLE_SIZE, 0, &position_data);
-		memcpy(position_data, astro_boy_positions, astro_boy_positions_array_count * sizeof(float32_t));        // Positions
-		vkUnmapMemory(this->m_device, this->m_vertex_buffer_memory[0]);
+		vkMapMemory(this->m_device, staging_buffers_memory[0], 0, VK_WHOLE_SIZE, 0, &position_data);
+		memcpy(position_data, astro_boy_positions, positions_buffer_size);        // Positions
+		vkUnmapMemory(this->m_device, staging_buffers_memory[0]);
 
 		void *non_position_data;
-		vkMapMemory(this->m_device, this->m_vertex_buffer_memory[1], 0, VK_WHOLE_SIZE, 0, &non_position_data);
-		memcpy(non_position_data, astro_boy_normals, astro_boy_normals_array_count * sizeof(float32_t));        // Normals
+		vkMapMemory(this->m_device, staging_buffers_memory[1], 0, VK_WHOLE_SIZE, 0, &non_position_data);
+		memcpy(non_position_data, astro_boy_normals, normals_buffer_size);        // Normals
 
-		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + astro_boy_normals_array_count * sizeof(float32_t);
-		memcpy(non_position_data, astro_boy_uvs, astro_boy_uvs_array_count * sizeof(float32_t));        // UVs
+		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + normals_buffer_size;
+		memcpy(non_position_data, astro_boy_uvs, uvs_buffer_size);        // UVs
 
-		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + astro_boy_uvs_array_count * sizeof(float32_t);
-		memcpy(non_position_data, astro_boy_weights, astro_boy_weights_array_count * sizeof(float32_t));        // Weights
+		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + uvs_buffer_size;
+		memcpy(non_position_data, astro_boy_weights, weights_buffer_size);        // Weights
 
-		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + astro_boy_weights_array_count * sizeof(float32_t);
-		memcpy(non_position_data, astro_boy_joints, astro_boy_joints_array_count * sizeof(float32_t));        // JoinIds
+		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + weights_buffer_size;
+		memcpy(non_position_data, astro_boy_joints, joints_buffer_size);        // JoinIds
 
-		vkUnmapMemory(this->m_device, this->m_vertex_buffer_memory[1]);
+		vkUnmapMemory(this->m_device, staging_buffers_memory[1]);
 
 		void *index_data;
-		vkMapMemory(this->m_device, this->m_index_buffer_memory, 0, VK_WHOLE_SIZE, 0, &index_data);
-		memcpy(index_data, astro_boy_indices, astro_boy_indices_array_count * sizeof(uint32_t));        // Indices
+		vkMapMemory(this->m_device, staging_buffers_memory[2], 0, VK_WHOLE_SIZE, 0, &index_data);
+		memcpy(index_data, astro_boy_indices, index_buffer_size);        // Indices
 
-		vkUnmapMemory(this->m_device, this->m_index_buffer_memory);
+		vkUnmapMemory(this->m_device, staging_buffers_memory[2]);
+
+		// Here copy from staging buffers into vbo and ibo
+		this->m_vertex_buffers[0] = this->create_buffer(positions_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+		this->m_vertex_buffers[1] = this->create_buffer(non_positions_buffer_size, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+		this->m_index_buffer      = this->create_buffer(index_buffer_size, VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+
+		this->m_vertex_buffer_memory[0] = this->allocate_bind_memory(this->m_vertex_buffers[0], VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		this->m_vertex_buffer_memory[1] = this->allocate_bind_memory(this->m_vertex_buffers[1], VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		this->m_index_buffer_memory     = this->allocate_bind_memory(this->m_index_buffer, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+		std::vector<VkBuffer> astro_boy_buffers{this->m_vertex_buffers[0], this->m_vertex_buffers[1], this->m_index_buffer};
+
+		this->copy_from_staging_buffers(staging_buffers, astro_boy_buffers);
+
+		for (size_t i = 0; i < staging_buffers.size(); ++i)
+		{
+			vkDestroyBuffer(this->m_device, staging_buffers[i].first, cfg::VkAllocator);
+			vkFreeMemory(this->m_device, staging_buffers_memory[i], cfg::VkAllocator);
+			staging_buffers[i].first = nullptr;
+		}
 	}
 
 	void destroy_buffers()
@@ -1891,7 +1978,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	VkRenderPass                 m_render_pass{nullptr};
 	void *                       m_window{nullptr};        // Window type that can be glfw or nullptr
 	VkCommandPool                m_graphics_command_pool{nullptr};
-	// VkCommandPool                m_transfer_command_pool{nullptr};
+	VkCommandPool                m_transfer_command_pool{nullptr};
 	// VkCommandPool                m_compute_command_pool{nullptr};
 	VkSemaphore    m_image_available_semaphore[cfg::get_number_of_buffers()];
 	VkSemaphore    m_render_finished_semaphore[cfg::get_number_of_buffers()];
