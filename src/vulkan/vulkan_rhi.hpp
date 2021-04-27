@@ -924,7 +924,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		submit_info.pWaitSemaphores           = waitSemaphores;
 		submit_info.pWaitDstStageMask         = waitStages;
 		submit_info.commandBufferCount        = 1;
-		submit_info.pCommandBuffers           = &this->m_command_buffers[image_index];
+		submit_info.pCommandBuffers           = &this->m_graphics_command_buffers[image_index];
 
 		VkSemaphore signalSemaphores[]   = {m_render_finished_semaphore[this->m_current_frame]};
 		submit_info.signalSemaphoreCount = 1;
@@ -1273,27 +1273,27 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		command_pool_info.flags                   = 0;        // VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
 		command_pool_info.queueFamilyIndex        = this->m_graphics_queue_index;
 
-		VkResult result = vkCreateCommandPool(this->m_device, &command_pool_info, cfg::VkAllocator, &this->m_command_pool);
+		VkResult result = vkCreateCommandPool(this->m_device, &command_pool_info, cfg::VkAllocator, &this->m_graphics_command_pool);
 		assert(result == VK_SUCCESS);
 	}
 
 	void destroy_command_pool()
 	{
-		vkDestroyCommandPool(this->m_device, this->m_command_pool, cfg::VkAllocator);
+		vkDestroyCommandPool(this->m_device, this->m_graphics_command_pool, cfg::VkAllocator);
 	}
 
 	void create_command_buffers()
 	{
-		this->m_command_buffers.resize(this->m_framebuffers.size());
+		this->m_graphics_command_buffers.resize(this->m_framebuffers.size());
 
 		VkCommandBufferAllocateInfo command_buffer_allocation_info = {};
 		command_buffer_allocation_info.sType                       = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
 		command_buffer_allocation_info.pNext                       = nullptr;
-		command_buffer_allocation_info.commandPool                 = this->m_command_pool;
+		command_buffer_allocation_info.commandPool                 = this->m_graphics_command_pool;
 		command_buffer_allocation_info.level                       = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-		command_buffer_allocation_info.commandBufferCount          = static_cast<uint32_t>(this->m_command_buffers.size());
+		command_buffer_allocation_info.commandBufferCount          = static_cast<uint32_t>(this->m_graphics_command_buffers.size());
 
-		VkResult result = vkAllocateCommandBuffers(this->m_device, &command_buffer_allocation_info, this->m_command_buffers.data());
+		VkResult result = vkAllocateCommandBuffers(this->m_device, &command_buffer_allocation_info, this->m_graphics_command_buffers.data());
 		assert(result == VK_SUCCESS);
 	}
 
@@ -1549,9 +1549,9 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 	void record_command_buffers()
 	{
-		for (size_t i = 0; i < this->m_command_buffers.size(); i++)
+		for (size_t i = 0; i < this->m_graphics_command_buffers.size(); i++)
 		{
-			const VkCommandBuffer &current_command_buffer = this->m_command_buffers[i];
+			const VkCommandBuffer &current_command_buffer = this->m_graphics_command_buffers[i];
 
 			VkCommandBufferBeginInfo command_buffer_begin_info = {};
 			command_buffer_begin_info.sType                    = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -1799,8 +1799,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->destroy_framebuffers();
 
 		// Rather than destroying command pool we are destroying command buffers themselves, TODO: I thought clearing the pool was faster
-		vkFreeCommandBuffers(this->m_device, this->m_command_pool, static_cast<uint32_t>(this->m_command_buffers.size()), this->m_command_buffers.data());
-		this->m_command_buffers.clear();
+		vkFreeCommandBuffers(this->m_device, this->m_graphics_command_pool, static_cast<uint32_t>(this->m_graphics_command_buffers.size()), this->m_graphics_command_buffers.data());
+		this->m_graphics_command_buffers.clear();
 
 		this->destroy_render_pass();
 		this->destroy_graphics_pipeline();
@@ -1865,7 +1865,9 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	std::vector<VkImage>         m_swapchain_images;
 	std::vector<VkImageView>     m_swapchain_image_views;
 	std::vector<VkFramebuffer>   m_framebuffers;
-	std::vector<VkCommandBuffer> m_command_buffers;
+	std::vector<VkCommandBuffer> m_graphics_command_buffers;
+	std::vector<VkCommandBuffer> m_compute_command_buffers;
+	std::vector<VkCommandBuffer> m_transfer_command_buffers;
 	VkSwapchainKHR               m_swapchain{nullptr};
 	VkFormat                     m_swapchain_format{VK_FORMAT_B8G8R8A8_SRGB};
 	VkExtent2D                   m_swapchain_extent{1024, 800};
@@ -1874,7 +1876,9 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	VkPipelineCache              m_pipeline_cache{nullptr};
 	VkRenderPass                 m_render_pass{nullptr};
 	void *                       m_window{nullptr};        // Window type that can be glfw or nullptr
-	VkCommandPool                m_command_pool{nullptr};
+	VkCommandPool                m_graphics_command_pool{nullptr};
+	VkCommandPool                m_transfer_command_pool{nullptr};
+	VkCommandPool                m_compute_command_pool{nullptr};
 	VkSemaphore                  m_image_available_semaphore[cfg::get_number_of_buffers()];
 	VkSemaphore                  m_render_finished_semaphore[cfg::get_number_of_buffers()];
 	VkFence                      m_queue_fence[cfg::get_number_of_buffers()];
