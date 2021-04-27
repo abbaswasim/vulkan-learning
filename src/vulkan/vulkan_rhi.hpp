@@ -23,12 +23,14 @@
 //
 // Version: 1.0.0
 
+#include "common.hpp"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <foundation/rortypes.hpp>
+#include <foundation/rorutilities.hpp>
 #include <fstream>
 #include <ios>
 #include <iostream>
@@ -36,6 +38,7 @@
 #include <stdexcept>
 #include <type_traits>
 #include <typeindex>
+#include <vulkan/vulkan_core.h>
 
 #include "profiling/rorlog.hpp"
 #include "roar.hpp"
@@ -878,7 +881,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->create_render_pass();
 		this->create_graphics_pipeline();
 
-		this->create_buffers();
+		this->create_vertex_buffers();
 
 		this->create_framebuffers();
 		this->create_command_pool();
@@ -1092,6 +1095,12 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 		// Graphics and Present queues are the same
 		this->m_present_queue = this->m_graphics_queue;
+
+		// Set transfer queue index as well
+		this->m_transfer_queue_index = queues[queue_data.m_indicies[transfer_index].first].queueFamilyIndex;
+
+		// Set compute queue index as well
+		this->m_compute_queue_index = queues[queue_data.m_indicies[compute_index].first].queueFamilyIndex;
 	}
 
 	void destroy_device()
@@ -1684,7 +1693,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		throw std::runtime_error("Failed to find suitable memory type!");
 	}
 
-	auto allocate_memory(VkBuffer a_buffer)
+	auto allocate_bind_memory(VkBuffer a_buffer, VkMemoryPropertyFlags a_properties = (VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT))
 	{
 		VkMemoryRequirements buffer_mem_req{};
 		vkGetBufferMemoryRequirements(this->m_device, a_buffer, &buffer_mem_req);
@@ -1694,7 +1703,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		VkMemoryAllocateInfo allocation_info{};
 		allocation_info.sType           = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
 		allocation_info.allocationSize  = buffer_mem_req.size;
-		allocation_info.memoryTypeIndex = find_memory_type(buffer_mem_req.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+		allocation_info.memoryTypeIndex = find_memory_type(buffer_mem_req.memoryTypeBits, a_properties);
 		allocation_info.pNext           = nullptr;
 
 		VkResult result = vkAllocateMemory(this->m_device, &allocation_info, cfg::VkAllocator, &buffer_memory);
@@ -1709,16 +1718,19 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 	VkBuffer create_buffer(size_t a_size, VkBufferUsageFlags a_usage)
 	{
+		// TODO: Change default behaviour of charing between transfer and graphics only
+		std::vector<uint32_t> indicies{this->m_graphics_queue_index, this->m_transfer_queue_index};
+
 		VkBufferCreateInfo buffer_info{};
 
 		buffer_info.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		buffer_info.pNext                 = nullptr;
 		buffer_info.flags                 = 0;
-		buffer_info.size                  = a_size;         // 1024 * 1024 * 2;        // 2kb
-		buffer_info.usage                 = a_usage;        // VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT
-		buffer_info.sharingMode           = VK_SHARING_MODE_EXCLUSIVE;
-		buffer_info.queueFamilyIndexCount = 0;
-		buffer_info.pQueueFamilyIndices   = nullptr;
+		buffer_info.size                  = a_size;                            // 1024 * 1024 * 2;        // 2kb
+		buffer_info.usage                 = a_usage;                           // VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+		buffer_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;        // VK_SHARING_MODE_EXCLUSIVE; // TODO: Make this more variable, this has performance implications, not all resources are shared either
+		buffer_info.queueFamilyIndexCount = ror::static_cast_safe<uint32_t>(indicies.size());
+		buffer_info.pQueueFamilyIndices   = indicies.data();
 
 		VkBuffer buffer;
 		VkResult result = vkCreateBuffer(this->m_device, &buffer_info, cfg::VkAllocator, &buffer);
@@ -1729,15 +1741,15 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		return buffer;
 	}
 
-	void create_buffers()
+	void create_vertex_buffers()
 	{
 		this->m_vertex_buffers[0] = this->create_buffer(1024 * 1024 * 50, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);         // 50KiB
 		this->m_vertex_buffers[1] = this->create_buffer(1024 * 1024 * 150, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);        // 150KiB
 		this->m_index_buffer      = this->create_buffer(1024 * 1024 * 60, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);          // 60KiB
 
-		this->m_vertex_buffer_memory[0] = this->allocate_memory(this->m_vertex_buffers[0]);
-		this->m_vertex_buffer_memory[1] = this->allocate_memory(this->m_vertex_buffers[1]);
-		this->m_index_buffer_memory     = this->allocate_memory(this->m_index_buffer);
+		this->m_vertex_buffer_memory[0] = this->allocate_bind_memory(this->m_vertex_buffers[0]);
+		this->m_vertex_buffer_memory[1] = this->allocate_bind_memory(this->m_vertex_buffers[1]);
+		this->m_index_buffer_memory     = this->allocate_bind_memory(this->m_index_buffer);
 
 		void *position_data;
 		vkMapMemory(this->m_device, this->m_vertex_buffer_memory[0], 0, VK_WHOLE_SIZE, 0, &position_data);
@@ -1856,6 +1868,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	VkPhysicalDeviceProperties   m_physical_device_properties;
 	uint32_t                     m_graphics_queue_index{0};
 	uint32_t                     m_present_queue_index{0};
+	uint32_t                     m_transfer_queue_index{0};
+	uint32_t                     m_compute_queue_index{0};
 	VkQueue                      m_graphics_queue{nullptr};
 	VkQueue                      m_compute_queue{nullptr};
 	VkQueue                      m_transfer_queue{nullptr};
@@ -1877,18 +1891,18 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	VkRenderPass                 m_render_pass{nullptr};
 	void *                       m_window{nullptr};        // Window type that can be glfw or nullptr
 	VkCommandPool                m_graphics_command_pool{nullptr};
-	VkCommandPool                m_transfer_command_pool{nullptr};
-	VkCommandPool                m_compute_command_pool{nullptr};
-	VkSemaphore                  m_image_available_semaphore[cfg::get_number_of_buffers()];
-	VkSemaphore                  m_render_finished_semaphore[cfg::get_number_of_buffers()];
-	VkFence                      m_queue_fence[cfg::get_number_of_buffers()];
-	VkFence                      m_queue_fence_in_flight[cfg::get_number_of_buffers()];
-	uint32_t                     m_current_frame{0};
-	VkBuffer                     m_vertex_buffers[2];                   // Temporary buffers for Astro_boy geometry
-	VkBuffer                     m_index_buffer{nullptr};               // Temporary buffers for Astro_boy geometry
-	VkDeviceMemory               m_vertex_buffer_memory[2];             // Temporary vertex memory buffers for Astro_boy geometry
-	VkDeviceMemory               m_index_buffer_memory{nullptr};        // Temporary index memory buffers for Astro_boy geometry
-};                                                                      // namespace vkd
+	// VkCommandPool                m_transfer_command_pool{nullptr};
+	// VkCommandPool                m_compute_command_pool{nullptr};
+	VkSemaphore    m_image_available_semaphore[cfg::get_number_of_buffers()];
+	VkSemaphore    m_render_finished_semaphore[cfg::get_number_of_buffers()];
+	VkFence        m_queue_fence[cfg::get_number_of_buffers()];
+	VkFence        m_queue_fence_in_flight[cfg::get_number_of_buffers()];
+	uint32_t       m_current_frame{0};
+	VkBuffer       m_vertex_buffers[2];                   // Temporary buffers for Astro_boy geometry
+	VkBuffer       m_index_buffer{nullptr};               // Temporary buffers for Astro_boy geometry
+	VkDeviceMemory m_vertex_buffer_memory[2];             // Temporary vertex memory buffers for Astro_boy geometry
+	VkDeviceMemory m_index_buffer_memory{nullptr};        // Temporary index memory buffers for Astro_boy geometry
+};                                                        // namespace vkd
 
 void PhysicalDevice::temp()
 {}
