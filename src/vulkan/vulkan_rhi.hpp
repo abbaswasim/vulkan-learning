@@ -24,6 +24,7 @@
 // Version: 1.0.0
 
 #include "common.hpp"
+#include <bounds/rorbounding.hpp>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -34,6 +35,8 @@
 #include <fstream>
 #include <ios>
 #include <iostream>
+#include <math/rormatrix4.hpp>
+#include <math/rormatrix4_functions.hpp>
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
@@ -44,8 +47,10 @@
 #include "roar.hpp"
 
 #define cimg_display 0
+#include "camera.hpp"
 #include <CImg/CImg.h>
 
+#include "skeletal_animation.hpp"
 #include "vulkan_astro_boy.hpp"
 
 #define VULKANED_USE_GLFW 1
@@ -242,6 +247,14 @@ inline bool align_load_file(const std::string &a_file_path, char **a_buffer, siz
 
 namespace vkd
 {
+typedef struct
+{
+	alignas(16) ror::Matrix4f model;
+	alignas(16) ror::Matrix4f view_projection;
+	alignas(16) ror::Matrix4f joints_matrices[64];
+
+} Uniforms;
+
 FORCE_INLINE auto get_surface_format()
 {
 	return VK_FORMAT_B8G8R8A8_SRGB;
@@ -855,12 +868,16 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		vkDeviceWaitIdle(this->m_device);
 
 		this->destroy_buffers();
+		this->destroy_uniform_buffers();
+
+		this->destroy_descriptor_set_layout();
 
 		this->destroy_sync_object();
 
 		this->cleanup_swapchain();
 
 		this->destroy_command_pools();
+		this->destroy_descriptor_pools();
 		this->destory_surface();
 		this->destroy_device();
 	}
@@ -877,19 +894,73 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->create_swapchain();
 		this->create_imageviews();
 
+		this->create_descriptor_set_layout();
+
 		// Create pipeline etc, to be cleaned out later
 		this->create_render_pass();
 		this->create_graphics_pipeline();
 
 		this->create_framebuffers();
 		this->create_command_pools();
+		this->create_descriptor_pools();
 		this->create_command_buffers();
 
 		this->create_vertex_buffers();
+		this->create_uniform_buffers();
+		this->create_descriptor_sets();
 
 		this->record_command_buffers();
 
 		this->create_sync_objects();
+	}
+
+	std::pair<unsigned int, double> get_keyframe_time()
+	{
+		double new_time = 0.0;
+
+		// if (do_animate)
+		new_time = glfwGetTime();
+
+		auto delta = new_time - old_time;
+
+		// Note this is very specific to AstroBoy
+		static double   accumulate_time  = 0.0;
+		static uint32_t current_keyframe = 0;
+		const double    pf               = 1.166670 / 36.0;
+
+		accumulate_time += delta;
+		// if (do_animate)
+		current_keyframe = static_cast<uint32_t>(accumulate_time / pf);
+
+		if (accumulate_time > 1.66670 || (current_keyframe > astro_boy_animation_keyframes_count - 5))        // Last 5 frames don't quite work with the animation loop, so ignored
+		{
+			accumulate_time  = 0.0;
+			current_keyframe = 0;
+		}
+
+		this->old_time = new_time;
+
+		return std::make_pair(current_keyframe, delta);
+	}
+
+	double old_time{0};
+
+	auto animate()
+	{
+		std::vector<ror::Matrix4f> astro_boy_joint_matrices;
+		astro_boy_joint_matrices.reserve(astro_boy_nodes_count);
+
+		auto [current_keyframe, delta_time] = get_keyframe_time();
+
+		auto astro_boy_matrices = ror::get_world_matrices_for_skinning(astro_boy_tree, astro_boy_nodes_count, current_keyframe, delta_time);
+
+		for (size_t i = 0; i < astro_boy_matrices.size(); ++i)
+		{
+			if (astro_boy_tree[i].m_type == 1)
+				astro_boy_joint_matrices.push_back(astro_boy_matrices[i] * ror::get_ror_matrix4(astro_boy_tree[i].m_inverse));
+		}
+
+		return astro_boy_joint_matrices;
 	}
 
 	void draw_frame()
@@ -934,6 +1005,9 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		submit_info.pSignalSemaphores    = signalSemaphores;
 
 		vkResetFences(this->m_device, 1, &this->m_queue_fence[this->m_current_frame]);
+
+		// Update our uniform buffers for this frame
+		this->update_uniform_buffer(image_index);
 
 		if (vkQueueSubmit(this->m_graphics_queue, 1, &submit_info, this->m_queue_fence[this->m_current_frame]) != VK_SUCCESS)
 		{
@@ -1297,6 +1371,66 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		vkDestroyCommandPool(this->m_device, this->m_transfer_command_pool, cfg::VkAllocator);
 	}
 
+	void create_descriptor_pools()
+	{
+		VkDescriptorPoolSize pool_size{};
+		pool_size.type            = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		pool_size.descriptorCount = static_cast<uint32_t>(cfg::get_number_of_buffers());        // This should be more generic, perhaps a pool per thread/per frame/per command buffer, TODO: Find out
+
+		VkDescriptorPoolCreateInfo descriptor_pool_create_info{};
+		descriptor_pool_create_info.sType         = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+		descriptor_pool_create_info.poolSizeCount = 1;
+		descriptor_pool_create_info.pPoolSizes    = &pool_size;
+		descriptor_pool_create_info.maxSets       = static_cast<uint32_t>(cfg::get_number_of_buffers());
+		descriptor_pool_create_info.flags         = 0;        // VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT
+
+		VkResult result = vkCreateDescriptorPool(this->m_device, &descriptor_pool_create_info, cfg::VkAllocator, &this->m_descriptor_pool);
+		assert(result == VK_SUCCESS);
+	}
+
+	void destroy_descriptor_pools()
+	{
+		vkDestroyDescriptorPool(this->m_device, this->m_descriptor_pool, cfg::VkAllocator);
+	}
+
+	void create_descriptor_sets()
+	{
+		std::vector<VkDescriptorSetLayout> layouts(cfg::get_number_of_buffers(), this->m_descriptor_set_layout);
+
+		VkDescriptorSetAllocateInfo descriptor_set_allocate_info{};
+		descriptor_set_allocate_info.sType              = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		descriptor_set_allocate_info.descriptorPool     = this->m_descriptor_pool;
+		descriptor_set_allocate_info.descriptorSetCount = static_cast<uint32_t>(layouts.size());
+		descriptor_set_allocate_info.pSetLayouts        = layouts.data();
+
+		VkResult result = vkAllocateDescriptorSets(this->m_device, &descriptor_set_allocate_info, this->m_descriptor_sets.data());
+		assert(result == VK_SUCCESS && "Failed to allocate descriptor sets");
+
+		// Update descriptor configuration
+		for (size_t i = 0; i < this->m_descriptor_sets.size(); i++)
+		{
+			// VkDescriptorImageInfo image_info{}; // Another option if we are dealing with images
+
+			VkDescriptorBufferInfo buffer_info{};
+			buffer_info.buffer = this->m_uniform_buffers[i];
+			buffer_info.offset = 0;
+			buffer_info.range  = VK_WHOLE_SIZE;        //sizeof(Uniforms);
+
+			VkWriteDescriptorSet descriptor_write{};
+			descriptor_write.sType            = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+			descriptor_write.dstSet           = this->m_descriptor_sets[i];
+			descriptor_write.dstBinding       = 0;        // TODO: Another hardcoded binding for descriptor
+			descriptor_write.dstArrayElement  = 0;
+			descriptor_write.descriptorType   = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+			descriptor_write.descriptorCount  = 1;
+			descriptor_write.pBufferInfo      = &buffer_info;
+			descriptor_write.pImageInfo       = nullptr;        // Optional
+			descriptor_write.pTexelBufferView = nullptr;        // Optional
+
+			vkUpdateDescriptorSets(this->m_device, 1, &descriptor_write, 0, nullptr);
+		}
+	}
+
 	void create_command_buffers()
 	{
 		this->m_graphics_command_buffers.resize(this->m_framebuffers.size());
@@ -1518,8 +1652,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		pipeline_layout_info.sType                      = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
 		pipeline_layout_info.pNext                      = nullptr;
 		pipeline_layout_info.flags                      = 0;
-		pipeline_layout_info.setLayoutCount             = 0;              // Optional
-		pipeline_layout_info.pSetLayouts                = nullptr;        // Optional
+		pipeline_layout_info.setLayoutCount             = 1;
+		pipeline_layout_info.pSetLayouts                = &this->m_descriptor_set_layout;
 		pipeline_layout_info.pushConstantRangeCount     = 0;              // Optional
 		pipeline_layout_info.pPushConstantRanges        = nullptr;        // Optional
 
@@ -1553,11 +1687,13 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		// cleanup
 		vkDestroyShaderModule(this->m_device, vert_shader_module, cfg::VkAllocator);
 		vkDestroyShaderModule(this->m_device, frag_shader_module, cfg::VkAllocator);
-		vkDestroyPipelineLayout(this->m_device, this->m_pipeline_layout, cfg::VkAllocator);
 	}
 
 	void destroy_graphics_pipeline()
 	{
+		vkDestroyPipelineLayout(this->m_device, this->m_pipeline_layout, cfg::VkAllocator);
+		this->m_pipeline_layout = nullptr;
+
 		vkDestroyPipeline(this->m_device, this->m_graphics_pipeline, cfg::VkAllocator);
 		this->m_graphics_pipeline = nullptr;
 	}
@@ -1571,8 +1707,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			VkCommandBufferBeginInfo command_buffer_begin_info = {};
 			command_buffer_begin_info.sType                    = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
 			command_buffer_begin_info.pNext                    = nullptr;
-			command_buffer_begin_info.flags                    = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;
-			command_buffer_begin_info.pInheritanceInfo         = nullptr;        // Optional
+			command_buffer_begin_info.flags                    = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT;        // TODO: In pratice should be VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT no reuse of command buffers
+			command_buffer_begin_info.pInheritanceInfo         = nullptr;                                             // Optional
 
 			VkResult result = vkBeginCommandBuffer(current_command_buffer, &command_buffer_begin_info);
 			assert(result == VK_SUCCESS);
@@ -1601,6 +1737,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			viewport.minDepth   = 0.0f;
 			viewport.maxDepth   = 1.0f;
 
+			this->update_uniform_buffer(i);
+
 			vkCmdBindPipeline(current_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, this->m_graphics_pipeline);
 			vkCmdSetViewport(current_command_buffer, 0, 1, &viewport);
 
@@ -1611,14 +1749,16 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 										this->m_vertex_buffers[1]};
 
 			VkDeviceSize offsets[] = {astro_boy_positions_array_count * 0,
-									  astro_boy_normals_array_count * 0,
-									  astro_boy_uvs_array_count * sizeof(float32_t),
-									  astro_boy_weights_array_count * sizeof(float32_t),
-									  astro_boy_joints_array_count * sizeof(float32_t)};
+									  astro_boy_normals_array_count * 0,                                                                                                                             // Normal offset
+									  astro_boy_normals_array_count * sizeof(float32_t),                                                                                                             // UV offset
+									  astro_boy_normals_array_count * sizeof(float32_t) + astro_boy_uvs_array_count * sizeof(float32_t),                                                             // Weight offset
+									  astro_boy_normals_array_count * sizeof(float32_t) + astro_boy_uvs_array_count * sizeof(float32_t) + astro_boy_weights_array_count * sizeof(float32_t)};        // JointID offset
 
 			vkCmdBindVertexBuffers(current_command_buffer, 0, 5, vertexBuffers, offsets);
 
 			vkCmdBindIndexBuffer(current_command_buffer, this->m_index_buffer, 0, VK_INDEX_TYPE_UINT32);
+
+			vkCmdBindDescriptorSets(current_command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, this->m_pipeline_layout, 0, 1, &this->m_descriptor_sets[i], 0, nullptr);
 
 			// vkCmdDraw(current_command_buffer, static_cast<uint32_t>(astro_boy_indices_array_count), 1, 0, 0);
 			vkCmdDrawIndexed(current_command_buffer, astro_boy_indices_array_count, 1, 0, 0, 0);
@@ -1747,6 +1887,79 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		return buffer;
 	}
 
+	void create_uniform_buffers()
+	{
+		VkDeviceSize buffer_size = sizeof(Uniforms);
+
+		for (size_t i = 0; i < this->m_uniform_buffers.size(); i++)
+		{
+			this->m_uniform_buffers[i]        = this->create_buffer(buffer_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+			this->m_uniform_buffers_memory[i] = this->allocate_bind_memory(this->m_uniform_buffers[i]);
+		}
+	}
+
+	void create_descriptor_set_layout()
+	{
+		// TODO: This is where you create a layout that works for everything like machinery or do something else
+		VkDescriptorSetLayoutBinding ubo_layout_binding{};
+		ubo_layout_binding.binding            = 0;        // This is the binding in the shader that is hardcoded at this stage
+		ubo_layout_binding.descriptorType     = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		ubo_layout_binding.descriptorCount    = 1;
+		ubo_layout_binding.stageFlags         = VK_SHADER_STAGE_VERTEX_BIT;        // This should also be something like VK_SHADER_STAGE_ALL or VK_SHADER_STAGE_ALL_GRAPHICS to simplify things but might have perf implications
+		ubo_layout_binding.pImmutableSamplers = nullptr;                           // Optional for uniforms but required for images
+
+		VkDescriptorSetLayoutCreateInfo layout_info{};
+		layout_info.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		layout_info.bindingCount = 1;
+		layout_info.pBindings    = &ubo_layout_binding;
+
+		VkResult result = vkCreateDescriptorSetLayout(this->m_device, &layout_info, nullptr, &this->m_descriptor_set_layout);
+
+		assert(result == VK_SUCCESS && "Failed to create descriptor set layout");
+	}
+
+	void destroy_descriptor_set_layout()
+	{
+		vkDestroyDescriptorSetLayout(this->m_device, this->m_descriptor_set_layout, cfg::VkAllocator);
+		this->m_descriptor_set_layout = nullptr;
+	}
+
+	void update_uniform_buffer(size_t a_index)
+	{
+		ror::Matrix4f model;
+		ror::Matrix4f view_projection;
+		ror::Vector3f camera_position;
+
+		ror::Matrix4f model_matrix{ror::matrix4_rotation_around_x(ror::to_radians(90.0f)) * ror::matrix4_rotation_around_y(ror::to_radians(180.0f))};
+		ror::Matrix4f translation{ror::matrix4_translation(ror::Vector3f{0.0f, 0.0f, -(this->m_astroboy_bbox.maximum() - this->m_astroboy_bbox.minimum()).z} / 2.0f)};
+
+		ror::glfw_camera_update(view_projection, model, camera_position);
+
+		model = ror::vulkan_clip_correction * model_matrix * translation * model;
+
+		Uniforms *uniform_data;
+		vkMapMemory(this->m_device, this->m_uniform_buffers_memory[a_index], 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void **>(&uniform_data));
+
+		uniform_data->model           = model;
+		uniform_data->view_projection = view_projection;
+
+		auto skinning_matrices = this->animate();
+		memcpy(uniform_data->joints_matrices[0].m_values, skinning_matrices[0].m_values, 44 * sizeof(float) * 16);
+
+		vkUnmapMemory(this->m_device, this->m_uniform_buffers_memory[a_index]);
+	}
+
+	void destroy_uniform_buffers()
+	{
+		for (size_t i = 0; i < this->m_uniform_buffers.size(); i++)
+		{
+			vkDestroyBuffer(this->m_device, this->m_uniform_buffers[i], cfg::VkAllocator);
+			vkFreeMemory(this->m_device, this->m_uniform_buffers_memory[i], cfg::VkAllocator);
+			this->m_uniform_buffers[i]        = nullptr;
+			this->m_uniform_buffers_memory[i] = nullptr;
+		}
+	}
+
 	void copy_from_staging_buffers(std::vector<std::pair<VkBuffer, size_t>> &a_source, std::vector<VkBuffer> &a_destination)
 	{
 		VkCommandBufferAllocateInfo command_buffer_allocate_info{};
@@ -1769,15 +1982,17 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		if (a_source.size() != a_destination.size())
 			ror::log_critical("Copying from different size a_source to a_destination, something won't be copied correctly");
 
-		VkBufferCopy buffer_copy_region{};
-		buffer_copy_region.srcOffset = 0;        // Optional
-		buffer_copy_region.dstOffset = 0;        // Optional
-
+		// TODO: Could be done in one go
 		for (size_t i = 0; i < a_source.size(); ++i)
 		{
-			buffer_copy_region.size = a_source[i].second;
+			VkBufferCopy buffer_copy_region{};
+			buffer_copy_region.srcOffset = 0;        // Optional
+			buffer_copy_region.dstOffset = 0;        // Optional
+			buffer_copy_region.size      = a_source[i].second;
+
 			vkCmdCopyBuffer(staging_command_buffer, a_source[i].first, a_destination[i], 1, &buffer_copy_region);
 		}
+
 		vkEndCommandBuffer(staging_command_buffer);
 
 		VkSubmitInfo staging_submit_info{};
@@ -1793,13 +2008,13 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 	void create_vertex_buffers()
 	{
-		size_t index_buffer_size         = astro_boy_indices_array_count * sizeof(uint32_t);
-		size_t positions_buffer_size     = astro_boy_positions_array_count * sizeof(float32_t);
-		size_t normals_buffer_size       = astro_boy_normals_array_count * sizeof(float32_t);
-		size_t uvs_buffer_size           = astro_boy_uvs_array_count * sizeof(float32_t);
-		size_t weights_buffer_size       = astro_boy_weights_array_count * sizeof(float32_t);
-		size_t joints_buffer_size        = astro_boy_joints_array_count * sizeof(int32_t);
-		size_t non_positions_buffer_size = normals_buffer_size + uvs_buffer_size + joints_buffer_size + weights_buffer_size;
+		constexpr size_t index_buffer_size         = astro_boy_indices_array_count * sizeof(uint32_t);
+		constexpr size_t positions_buffer_size     = astro_boy_positions_array_count * sizeof(float32_t);
+		constexpr size_t normals_buffer_size       = astro_boy_normals_array_count * sizeof(float32_t);
+		constexpr size_t uvs_buffer_size           = astro_boy_uvs_array_count * sizeof(float32_t);
+		constexpr size_t weights_buffer_size       = astro_boy_weights_array_count * sizeof(float32_t);
+		constexpr size_t joints_buffer_size        = astro_boy_joints_array_count * sizeof(uint32_t);
+		constexpr size_t non_positions_buffer_size = normals_buffer_size + uvs_buffer_size + joints_buffer_size + weights_buffer_size;
 
 		std::vector<std::pair<VkBuffer, size_t>> staging_buffers{};
 		std::vector<VkDeviceMemory>              staging_buffers_memory{};
@@ -1818,28 +2033,28 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		staging_buffers_memory[1] = this->allocate_bind_memory(staging_buffers[1].first);        // default of VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 		staging_buffers_memory[2] = this->allocate_bind_memory(staging_buffers[2].first);        // default of VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
 
-		void *position_data;
-		vkMapMemory(this->m_device, staging_buffers_memory[0], 0, VK_WHOLE_SIZE, 0, &position_data);
+		uint8_t *position_data;
+		vkMapMemory(this->m_device, staging_buffers_memory[0], 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void **>(&position_data));
 		memcpy(position_data, astro_boy_positions, positions_buffer_size);        // Positions
 		vkUnmapMemory(this->m_device, staging_buffers_memory[0]);
 
-		void *non_position_data;
-		vkMapMemory(this->m_device, staging_buffers_memory[1], 0, VK_WHOLE_SIZE, 0, &non_position_data);
+		uint8_t *non_position_data;
+		vkMapMemory(this->m_device, staging_buffers_memory[1], 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void **>(&non_position_data));
 		memcpy(non_position_data, astro_boy_normals, normals_buffer_size);        // Normals
 
-		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + normals_buffer_size;
+		non_position_data += normals_buffer_size;
 		memcpy(non_position_data, astro_boy_uvs, uvs_buffer_size);        // UVs
 
-		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + uvs_buffer_size;
+		non_position_data += uvs_buffer_size;
 		memcpy(non_position_data, astro_boy_weights, weights_buffer_size);        // Weights
 
-		non_position_data = reinterpret_cast<uint8_t *>(non_position_data) + weights_buffer_size;
+		non_position_data += weights_buffer_size;
 		memcpy(non_position_data, astro_boy_joints, joints_buffer_size);        // JoinIds
 
 		vkUnmapMemory(this->m_device, staging_buffers_memory[1]);
 
-		void *index_data;
-		vkMapMemory(this->m_device, staging_buffers_memory[2], 0, VK_WHOLE_SIZE, 0, &index_data);
+		uint8_t *index_data;
+		vkMapMemory(this->m_device, staging_buffers_memory[2], 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void **>(&index_data));
 		memcpy(index_data, astro_boy_indices, index_buffer_size);        // Indices
 
 		vkUnmapMemory(this->m_device, staging_buffers_memory[2]);
@@ -1857,12 +2072,20 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 		this->copy_from_staging_buffers(staging_buffers, astro_boy_buffers);
 
+		// Cleanup staging buffers
 		for (size_t i = 0; i < staging_buffers.size(); ++i)
 		{
 			vkDestroyBuffer(this->m_device, staging_buffers[i].first, cfg::VkAllocator);
 			vkFreeMemory(this->m_device, staging_buffers_memory[i], cfg::VkAllocator);
-			staging_buffers[i].first = nullptr;
+
+			staging_buffers[i].first  = nullptr;
+			staging_buffers_memory[i] = nullptr;
 		}
+
+		this->m_astroboy_bbox.create_from_min_max(ror::Vector3f(astro_boy_bounding_box[0], astro_boy_bounding_box[1], astro_boy_bounding_box[2]),
+												  ror::Vector3f(astro_boy_bounding_box[3], astro_boy_bounding_box[4], astro_boy_bounding_box[5]));
+
+		ror::glfw_camera_visual_volume(this->m_astroboy_bbox.minimum(), this->m_astroboy_bbox.maximum());
 	}
 
 	void destroy_buffers()
@@ -1974,22 +2197,28 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	VkExtent2D                   m_swapchain_extent{1024, 800};
 	VkPipeline                   m_graphics_pipeline{nullptr};
 	VkPipelineLayout             m_pipeline_layout{nullptr};
+	VkDescriptorSetLayout        m_descriptor_set_layout{nullptr};
+	VkDescriptorPool             m_descriptor_pool{nullptr};
+	std::vector<VkDescriptorSet> m_descriptor_sets{cfg::get_number_of_buffers()};
 	VkPipelineCache              m_pipeline_cache{nullptr};
 	VkRenderPass                 m_render_pass{nullptr};
 	void *                       m_window{nullptr};        // Window type that can be glfw or nullptr
 	VkCommandPool                m_graphics_command_pool{nullptr};
 	VkCommandPool                m_transfer_command_pool{nullptr};
-	// VkCommandPool                m_compute_command_pool{nullptr};
-	VkSemaphore    m_image_available_semaphore[cfg::get_number_of_buffers()];
-	VkSemaphore    m_render_finished_semaphore[cfg::get_number_of_buffers()];
-	VkFence        m_queue_fence[cfg::get_number_of_buffers()];
-	VkFence        m_queue_fence_in_flight[cfg::get_number_of_buffers()];
-	uint32_t       m_current_frame{0};
-	VkBuffer       m_vertex_buffers[2];                   // Temporary buffers for Astro_boy geometry
-	VkBuffer       m_index_buffer{nullptr};               // Temporary buffers for Astro_boy geometry
-	VkDeviceMemory m_vertex_buffer_memory[2];             // Temporary vertex memory buffers for Astro_boy geometry
-	VkDeviceMemory m_index_buffer_memory{nullptr};        // Temporary index memory buffers for Astro_boy geometry
-};                                                        // namespace vkd
+	VkSemaphore                  m_image_available_semaphore[cfg::get_number_of_buffers()];
+	VkSemaphore                  m_render_finished_semaphore[cfg::get_number_of_buffers()];
+	VkFence                      m_queue_fence[cfg::get_number_of_buffers()];
+	VkFence                      m_queue_fence_in_flight[cfg::get_number_of_buffers()];
+	uint32_t                     m_current_frame{0};
+	VkBuffer                     m_vertex_buffers[2];                                           // Temporary buffers for Astro_boy geometry
+	VkBuffer                     m_index_buffer{nullptr};                                       // Temporary buffers for Astro_boy geometry
+	VkDeviceMemory               m_vertex_buffer_memory[2];                                     // Temporary vertex memory buffers for Astro_boy geometry
+	VkDeviceMemory               m_index_buffer_memory{nullptr};                                // Temporary index memory buffers for Astro_boy geometry
+	std::vector<VkBuffer>        m_uniform_buffers{cfg::get_number_of_buffers()};               // Uniforms buffers for all frames in flight
+	std::vector<VkDeviceMemory>  m_uniform_buffers_memory{cfg::get_number_of_buffers()};        // Uniforms buffers memory for all frames in flight
+	ror::BoundingBoxf            m_astroboy_bbox{};
+
+};        // namespace vkd
 
 void PhysicalDevice::temp()
 {}
@@ -2014,6 +2243,8 @@ class Context
 
 	FORCE_INLINE Context(GLFWwindow *a_window)
 	{
+		ror::glfw_camera_init(a_window);
+
 		this->m_instances.emplace_back(std::make_shared<Instance>());
 		this->m_gpus[this->m_current_gpu] = std::make_shared<PhysicalDevice>(this->m_instances[this->m_current_instance]->get_handle(), a_window);
 	}

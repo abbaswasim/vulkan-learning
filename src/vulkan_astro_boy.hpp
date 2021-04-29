@@ -2,6 +2,7 @@
 #pragma once
 
 #include "assets/astroboy/astro_boy_geometry.hpp"
+#include "assets/astroboy/astro_boy_animation.hpp"
 #include "common.hpp"
 #include "roar.hpp"
 #include <array>
@@ -61,7 +62,7 @@ static auto get_astro_boy_vertex_attributes()
 
 	attributes[jointid_loc_bind].location = jointid_loc_bind;        // JointID
 	attributes[jointid_loc_bind].binding  = jointid_loc_bind + off;
-	attributes[jointid_loc_bind].format   = VK_FORMAT_R32G32B32_SFLOAT;
+	attributes[jointid_loc_bind].format   = VK_FORMAT_R32G32B32_UINT;
 	attributes[jointid_loc_bind].offset   = 0;
 
 	return attributes;
@@ -97,7 +98,7 @@ static auto get_astro_boy_vertex_bindings()
 
 	bindings[jointid_binding].binding   = jointid_binding + off;
 	bindings[jointid_binding].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
-	bindings[jointid_binding].stride    = sizeof(float32_t) * 3;
+	bindings[jointid_binding].stride    = sizeof(uint32_t) * 3;
 
 	return bindings;
 }
