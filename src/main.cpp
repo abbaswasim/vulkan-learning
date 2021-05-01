@@ -150,7 +150,7 @@ class VulkanApplication
 		while (!glfwWindowShouldClose(this->m_window))
 		{
 			glfwPollEvents();
-			this->m_context->draw_frame();
+			this->m_context->draw_frame(update_animation);
 		}
 	}
 

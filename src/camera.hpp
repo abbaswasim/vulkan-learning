@@ -149,7 +149,7 @@ class OrbitCamera
 	float32_t m_zooming_depth          = 0.0f;
 
 	float32_t m_x_rotation    = 0.0f;
-	float32_t m_y_rotation    = 0.0f;
+	float32_t m_z_rotation    = 0.0f;
 	float32_t m_x_translation = 0.0f;
 	float32_t m_y_translation = 0.0f;
 

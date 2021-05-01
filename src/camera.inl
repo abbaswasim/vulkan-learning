@@ -147,7 +147,7 @@ void OrbitCamera::look_at()
 	// Apply mouse movement transformation on top
 	Matrix4f transformation = identity_matrix4f;
 	Matrix4f rotation_x;
-	Matrix4f rotation_y;
+	Matrix4f rotation_z;
 	Matrix4f translation0;
 	Matrix4f translation1;
 	Matrix4f translation;
@@ -155,12 +155,12 @@ void OrbitCamera::look_at()
 
 	translation0 = ror::matrix4_translation(min_to);
 	rotation_x   = ror::matrix4_rotation_around_x(this->m_x_rotation / 4.0f);
-	rotation_y   = ror::matrix4_rotation_around_y(this->m_y_rotation / 4.0f);
+	rotation_z   = ror::matrix4_rotation_around_z(this->m_z_rotation / 4.0f);
 	translation1 = ror::matrix4_translation(this->m_to);
 
 	translation = ror::matrix4_translation(this->m_x_translation, this->m_y_translation, 0.0f);
 
-	transformation = (translation1 * rotation_x * rotation_y * translation0);
+	transformation = (translation1 * rotation_x * rotation_z * translation0);
 
 	this->m_view_projection       = this->m_projection * this->m_view * translation;
 	this->m_model                 = transformation;
@@ -240,7 +240,7 @@ void OrbitCamera::zoom_by(float32_t a_zoom_delta)
 void OrbitCamera::update_left_key_function(int &a_x_delta, int &a_y_delta)
 {
 	this->m_x_rotation += static_cast<float32_t>(0.05f * static_cast<float32_t>(a_y_delta));
-	this->m_y_rotation += static_cast<float32_t>(0.05f * static_cast<float32_t>(a_x_delta));
+	this->m_z_rotation += static_cast<float32_t>(0.05f * static_cast<float32_t>(a_x_delta));
 }
 
 void OrbitCamera::update_middle_key_function(int &a_x_delta, int &a_y_delta)

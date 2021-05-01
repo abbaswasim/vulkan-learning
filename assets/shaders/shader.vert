@@ -16,7 +16,7 @@ layout(binding = 0) uniform UBO
 {
 	mat4 model;
 	mat4 view_projection;
-	mat4 joints_matrices[64];
+	mat4 joints_matrices[44];
 }ubo;
 
 void main()
@@ -31,9 +31,6 @@ void main()
 	normal_out          = mat3(transpose(inverse(ubo.model))) * normals;
 	position_out        = vec3(model_animated * vec4(positions, 1.0));
 	gl_Position         = ubo.view_projection * vec4(position_out, 1.0);
-
 	uv_out              = uvs;
-	uv_out.y            = 1.0 - uvs.y;
-
 	color_out           = normals;
 }
