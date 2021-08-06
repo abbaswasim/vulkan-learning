@@ -29,7 +29,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
+#include <foundation/rorcrtp.hpp>
 #include <foundation/rortypes.hpp>
 #include <foundation/rorutilities.hpp>
 #include <fstream>
