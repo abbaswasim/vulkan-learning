@@ -29,7 +29,20 @@ add_subdirectory(roar)
 # Add glfw
 add_subdirectory(glfw)
 
+# Add vulkan
 add_library(vulkan_headers INTERFACE)
 set(VULKAN_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/vulkan/include)
 target_sources(vulkan_headers INTERFACE ${VULKAN_INCLUDE_DIR}/vulkan/vulkan.h)
 target_include_directories(vulkan_headers INTERFACE ${VULKAN_INCLUDE_DIR})
+
+# Add basis
+set(BASIS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/basis_universal)
+set(BASIS_SOURCE_FILES
+	${BASIS_DIR}/transcoder/basisu_transcoder.cpp
+	${BASIS_DIR}/transcoder/basisu_transcoder.h
+	${BASIS_DIR}/zstd/zstddeclib.c)
+
+add_library(basisu STATIC ${BASIS_SOURCE_FILES})
+target_include_directories(basisu PUBLIC ${BASIS_DIR})
+target_include_directories(basisu PUBLIC ${BASIS_DIR}/transcoder)
+target_compile_options(basisu PUBLIC "-fno-strict-aliasing")
