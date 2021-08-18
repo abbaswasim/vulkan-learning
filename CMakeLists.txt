@@ -78,11 +78,11 @@ find_package(Vulkan) # Has to be Vulkan not vulkan (CMAKE seems to case sensitiv
 
 set(VULKANED_REQUIRED_LIBRARIES_SYSTEM
   vulkan_headers
+  roar
   Vulkan::Vulkan
   cimage
   basisu
-  glfw
-  roar)
+  glfw)
 
 set(VULKANED_REQUIRED_LIBRARIES
   dl)
