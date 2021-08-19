@@ -145,6 +145,11 @@ FORCE_INLINE constexpr bool get_visualise_mipmaps()
 	return false;
 }
 
+FORCE_INLINE constexpr uint32_t get_multisample_count()
+{
+	return 8;
+}
+
 FORCE_INLINE auto get_vsync()
 {
 	// TODO: No vsync available on Android so when enabling make sure android is guarded
@@ -478,7 +483,7 @@ inline Texture read_texture_from_file(const char *a_file_name)
 					}
 
 					uint32_t decode_flags = 0;
-					uint64_t decode_size = level_info.m_orig_height * level_info.m_orig_width * 4; // FIXME: Only works for RGBA
+					uint64_t decode_size  = level_info.m_orig_height * level_info.m_orig_width * 4;        // FIXME: Only works for RGBA
 
 					if (compressed)
 						decode_size = decoded_block_size * level_info.m_total_blocks;
@@ -498,7 +503,7 @@ inline Texture read_texture_from_file(const char *a_file_name)
 
 					if (cfg::get_visualise_mipmaps())
 					{
-						for (size_t i = 0; i < decode_size; i += 4) // FIXME: Only works for RGBA
+						for (size_t i = 0; i < decode_size; i += 4)        // FIXME: Only works for RGBA
 						{
 							uint8_t cs[3];
 
@@ -1185,6 +1190,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->create_render_pass();
 		this->create_graphics_pipeline();
 
+		this->create_msaa_color_buffer();
 		this->create_depth_buffer();
 		this->create_framebuffers();
 		this->create_command_pools();
@@ -1201,23 +1207,26 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->create_sync_objects();
 	}
 
-	std::pair<unsigned int, double> get_keyframe_time()
+	std::pair<unsigned int, double> get_keyframe_time(bool a_animate)
 	{
-		double new_time = 0.0;
-
-		// if (do_animate)
-		new_time = glfwGetTime();
-
-		auto delta = new_time - old_time;
-
 		// Note this is very specific to AstroBoy
 		static double   accumulate_time  = 0.0;
 		static uint32_t current_keyframe = 0;
-		const double    pf               = 1.166670 / 36.0;
+		const double    per_frame_time   = 1.166670 / 36.0;
+
+		double new_time = 0.0;
+		double delta    = 0.0;
+
+		new_time = glfwGetTime();
+
+		if (a_animate)
+			delta = new_time - this->m_old_time;
+
+		this->m_old_time = new_time;
 
 		accumulate_time += delta;
-		// if (do_animate)
-		current_keyframe = static_cast<uint32_t>(accumulate_time / pf);
+
+		current_keyframe = static_cast<uint32_t>(accumulate_time / per_frame_time);
 
 		if (accumulate_time > 1.66670 || (current_keyframe > astro_boy_animation_keyframes_count - 5))        // Last 5 frames don't quite work with the animation loop, so ignored
 		{
@@ -1225,19 +1234,17 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			current_keyframe = 0;
 		}
 
-		this->old_time = new_time;
-
 		return std::make_pair(current_keyframe, delta);
 	}
 
-	double old_time{0};
+	double m_old_time{0};
 
-	auto animate()
+	auto animate(bool a_animate)
 	{
 		std::vector<ror::Matrix4f> astro_boy_joint_matrices;
 		astro_boy_joint_matrices.reserve(astro_boy_nodes_count);
 
-		auto [current_keyframe, delta_time] = get_keyframe_time();
+		auto [current_keyframe, delta_time] = get_keyframe_time(a_animate);
 
 		auto astro_boy_matrices = ror::get_world_matrices_for_skinning(astro_boy_tree, astro_boy_nodes_count, current_keyframe, delta_time);
 
@@ -1350,6 +1357,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->create_imageviews();
 		this->create_render_pass();
 		this->create_graphics_pipeline();
+		this->create_msaa_color_buffer();
 		this->create_depth_buffer();
 		this->create_framebuffers();
 		this->create_command_buffers();
@@ -1608,7 +1616,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 		for (size_t i = 0; i < this->m_swapchain_image_views.size(); i++)
 		{
-			std::array<VkImageView, 2> attachments{this->m_swapchain_image_views[i], this->m_depth_image_view};
+			std::array<VkImageView, 3> attachments{this->m_swapchain_image_views[i], this->m_depth_image_view, this->m_msaa_color_image_view};
 
 			VkFramebufferCreateInfo framebuffer_info = {};
 			framebuffer_info.sType                   = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -1885,7 +1893,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		pipeline_multisampling_state_info.sType                                = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
 		pipeline_multisampling_state_info.pNext                                = nullptr;
 		pipeline_multisampling_state_info.flags                                = 0;
-		pipeline_multisampling_state_info.rasterizationSamples                 = VK_SAMPLE_COUNT_1_BIT;
+		pipeline_multisampling_state_info.rasterizationSamples                 = this->get_sample_count();
 		pipeline_multisampling_state_info.sampleShadingEnable                  = VK_FALSE;
 		pipeline_multisampling_state_info.minSampleShading                     = 1.0f;            // Optional
 		pipeline_multisampling_state_info.pSampleMask                          = nullptr;         // Optional
@@ -2079,16 +2087,18 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 	void create_render_pass()
 	{
+		VkSampleCountFlagBits msaa_samples = this->get_sample_count();
+
 		VkAttachmentDescription color_attachment_description = {};
 		color_attachment_description.flags                   = 0;
 		color_attachment_description.format                  = this->m_swapchain_format;
-		color_attachment_description.samples                 = VK_SAMPLE_COUNT_1_BIT;
+		color_attachment_description.samples                 = msaa_samples;
 		color_attachment_description.loadOp                  = VK_ATTACHMENT_LOAD_OP_CLEAR;
 		color_attachment_description.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE;
 		color_attachment_description.stencilLoadOp           = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 		color_attachment_description.stencilStoreOp          = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		color_attachment_description.initialLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-		color_attachment_description.finalLayout             = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		color_attachment_description.finalLayout             = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;//VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
 		VkAttachmentReference color_attachment_reference = {};
 		color_attachment_reference.attachment            = 0;
@@ -2097,7 +2107,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		VkAttachmentDescription depth_attachment_description = {};
 		depth_attachment_description.flags                   = 0;
 		depth_attachment_description.format                  = VK_FORMAT_D24_UNORM_S8_UINT;
-		depth_attachment_description.samples                 = VK_SAMPLE_COUNT_1_BIT;
+		depth_attachment_description.samples                 = msaa_samples;
 		depth_attachment_description.loadOp                  = VK_ATTACHMENT_LOAD_OP_CLEAR;
 		depth_attachment_description.storeOp                 = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		depth_attachment_description.stencilLoadOp           = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -2109,6 +2119,21 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		depth_attachment_reference.attachment            = 1;
 		depth_attachment_reference.layout                = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
+		VkAttachmentDescription resolved_attachment_description = {};
+		resolved_attachment_description.flags                   = 0;
+		resolved_attachment_description.format                  = this->m_swapchain_format;
+		resolved_attachment_description.samples                 = VK_SAMPLE_COUNT_1_BIT;
+		resolved_attachment_description.loadOp                  = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		resolved_attachment_description.storeOp                 = VK_ATTACHMENT_STORE_OP_STORE;
+		resolved_attachment_description.stencilLoadOp           = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+		resolved_attachment_description.stencilStoreOp          = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+		resolved_attachment_description.initialLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
+		resolved_attachment_description.finalLayout             = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+		VkAttachmentReference resolve_attachment_reference = {};
+		resolve_attachment_reference.attachment            = 2;
+		resolve_attachment_reference.layout                = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
 		VkSubpassDescription subpass_description    = {};
 		subpass_description.flags                   = 0;
 		subpass_description.pipelineBindPoint       = VK_PIPELINE_BIND_POINT_GRAPHICS;
@@ -2116,7 +2141,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		subpass_description.pInputAttachments       = nullptr;
 		subpass_description.colorAttachmentCount    = 1;
 		subpass_description.pColorAttachments       = &color_attachment_reference;
-		subpass_description.pResolveAttachments     = nullptr;
+		subpass_description.pResolveAttachments     = &resolve_attachment_reference;
 		subpass_description.pDepthStencilAttachment = &depth_attachment_reference;
 		subpass_description.preserveAttachmentCount = 0;
 		subpass_description.pPreserveAttachments    = nullptr;
@@ -2130,7 +2155,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		subpass_dependency.dstAccessMask       = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 		subpass_dependency.dependencyFlags     = 0;
 
-		std::array<VkAttachmentDescription, 2> attachments{color_attachment_description, depth_attachment_description};
+		std::array<VkAttachmentDescription, 3> attachments{color_attachment_description, depth_attachment_description, resolved_attachment_description};
 
 		VkRenderPassCreateInfo render_pass_info = {};
 		render_pass_info.sType                  = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -2276,11 +2301,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		uniform_data->model           = model;
 		uniform_data->view_projection = ror::vulkan_clip_correction * view_projection;
 
-		if (a_animate)
-		{
-			auto skinning_matrices = this->animate();
-			memcpy(uniform_data->joints_matrices[0].m_values, skinning_matrices[0].m_values, 44 * sizeof(float) * 16);
-		}
+		auto skinning_matrices = this->animate(a_animate);
+		memcpy(uniform_data->joints_matrices[0].m_values, skinning_matrices[0].m_values, 44 * sizeof(float) * 16);
 
 		vkUnmapMemory(this->m_device, this->m_uniform_buffers_memory[a_index]);
 	}
@@ -2539,7 +2561,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->m_index_buffer      = nullptr;
 	}
 
-	VkImage create_image(uint32_t a_width, uint32_t a_height, VkFormat a_format, VkImageTiling a_tiling, VkImageUsageFlags a_usage, uint32_t a_mip_levels)
+	VkImage create_image(uint32_t a_width, uint32_t a_height, VkFormat a_format, VkImageTiling a_tiling, VkImageUsageFlags a_usage, uint32_t a_mip_levels, VkSampleCountFlagBits a_samples_count = VK_SAMPLE_COUNT_1_BIT)
 	{
 		VkImageCreateInfo image_info{};
 		image_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -2553,7 +2575,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		image_info.tiling        = a_tiling;
 		image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 		image_info.usage         = a_usage;
-		image_info.samples       = VK_SAMPLE_COUNT_1_BIT;
+		image_info.samples       = a_samples_count;        // VK_SAMPLE_COUNT_1_BIT;
 		image_info.sharingMode   = VK_SHARING_MODE_EXCLUSIVE;
 		image_info.flags         = 0;        // Optional
 
@@ -2666,6 +2688,28 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		assert(result == VK_SUCCESS);
 	}
 
+	VkSampleCountFlagBits get_sample_count()
+	{
+		// Get color and depth sample count flags
+		VkSampleCountFlags counts = this->m_physical_device_properties.limits.framebufferColorSampleCounts &
+									this->m_physical_device_properties.limits.framebufferDepthSampleCounts;
+
+		VkSampleCountFlagBits required = static_cast<VkSampleCountFlagBits>(cfg::get_multisample_count());        // FIXME: Dangerous, if vulkan header changes or sample count isn't 2's power
+
+		// Return if required available otherwise go lower until an alternative is available
+		do
+		{
+			if (counts & required)
+				return required;
+
+			required = static_cast<VkSampleCountFlagBits>(required >> 2);
+
+		} while (required);
+
+		// No choice but to return no MSAA
+		return VK_SAMPLE_COUNT_1_BIT;
+	}
+
 	void destroy_texture_sampler()
 	{
 		vkDestroySampler(this->m_device, this->m_texture_sampler, cfg::VkAllocator);
@@ -2696,6 +2740,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->destroy_graphics_pipeline();
 		this->destroy_imageviews();
 		this->destroy_depth_buffer();
+		this->destroy_msaa_color_buffer();
 		this->destroy_swapchain();
 	}
 
@@ -2754,10 +2799,33 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 	void create_depth_buffer()
 	{
+		// TODO: Called multiple times, should be cached
+		VkSampleCountFlagBits samples = this->get_sample_count();
+
 		VkFormat depth_format      = VK_FORMAT_D24_UNORM_S8_UINT;        // TODO: Make more generic and flexible
-		this->m_depth_image        = this->create_image(this->m_swapchain_extent.width, this->m_swapchain_extent.height, VK_FORMAT_D24_UNORM_S8_UINT, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 1);
+		this->m_depth_image        = this->create_image(this->m_swapchain_extent.width, this->m_swapchain_extent.height, VK_FORMAT_D24_UNORM_S8_UINT, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 1, samples);
 		this->m_depth_image_memory = this->allocate_bind_image_memory(this->m_depth_image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 		this->m_depth_image_view   = this->create_image_view(this->m_depth_image, depth_format, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
+	}
+
+	void create_msaa_color_buffer()
+	{
+		// TODO: Called multiple times, should be cached
+		VkSampleCountFlagBits samples = this->get_sample_count();
+
+		ror::log_critical("Enabling color multi-sampling I got sampels = {}", samples);
+
+		this->m_msaa_color_image        = this->create_image(this->m_swapchain_extent.width, this->m_swapchain_extent.height, this->m_swapchain_format, VK_IMAGE_TILING_OPTIMAL,
+													  VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 1, samples);
+		this->m_msaa_color_image_memory = this->allocate_bind_image_memory(this->m_msaa_color_image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+		this->m_msaa_color_image_view   = this->create_image_view(this->m_msaa_color_image, this->m_swapchain_format, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+	}
+
+	void destroy_msaa_color_buffer()
+	{
+		this->destroy_image(this->m_msaa_color_image);
+		this->destroy_imageview(this->m_msaa_color_image_view);
+		vkFreeMemory(this->m_device, this->m_msaa_color_image_memory, cfg::VkAllocator);
 	}
 
 	void destroy_depth_buffer()
@@ -2813,6 +2881,9 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	VkDeviceMemory               m_index_buffer_memory{nullptr};                                // Temporary index memory buffers for Astro_boy geometry
 	std::vector<VkBuffer>        m_uniform_buffers{cfg::get_number_of_buffers()};               // Uniforms buffers for all frames in flight
 	std::vector<VkDeviceMemory>  m_uniform_buffers_memory{cfg::get_number_of_buffers()};        // Uniforms buffers memory for all frames in flight
+	VkImage                      m_msaa_color_image{nullptr};                                   // Color image used for unresolved MSAA RT
+	VkDeviceMemory               m_msaa_color_image_memory{nullptr};
+	VkImageView                  m_msaa_color_image_view{nullptr};
 	VkImage                      m_depth_image{nullptr};
 	VkImageView                  m_depth_image_view{nullptr};
 	VkDeviceMemory               m_depth_image_memory{nullptr};
