@@ -24,6 +24,7 @@
 // Version: 1.0.0
 
 #include "common.hpp"
+#include <array>
 #include <bounds/rorbounding.hpp>
 #include <cassert>
 #include <cstddef>
@@ -40,6 +41,7 @@
 #include <iostream>
 #include <math/rormatrix4.hpp>
 #include <math/rormatrix4_functions.hpp>
+#include <math/rorvector3.hpp>
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
@@ -63,6 +65,8 @@
 #include <utility>
 #include <vector>
 
+#include "transcoder/basisu_transcoder.h"
+
 class VulkanApplication;
 
 namespace cfg        // Should be moved out later
@@ -77,41 +81,6 @@ FORCE_INLINE std::string get_engine_name()         { return "VulkanEd Engine";}
 FORCE_INLINE uint32_t    get_engine_version()      { return CFG_VK_MAKE_VERSION(1, 0, 0);}
 FORCE_INLINE uint32_t    get_api_version()         { return CFG_VK_MAKE_VERSION(1, 1, 0);} // TODO: Try 1.2 on Linux
 // clang-format on
-
-inline void read_texture_from_file(const char *a_file_name, unsigned char **a_data, unsigned int &a_width, unsigned int &a_height, unsigned int &a_bpp)
-{
-	cimg_library::CImg<unsigned char> src(a_file_name);
-
-	unsigned int width  = static_cast<uint32_t>(src.width());
-	unsigned int height = static_cast<uint32_t>(src.height());
-	unsigned int bpp    = static_cast<uint32_t>(src.spectrum());
-
-	a_width  = width;
-	a_height = height;
-	a_bpp    = bpp;
-
-	// Data is not stord like traditional RGBRGBRGBRGB triplets but rater RRRRGGGGBBBB
-	// In other words R(0,0)R(1,0)R(0,1)R(1,1)G(0,0)G(1,0)G(0,1)G(1,1)B(0,0)B(1,0)B(0,1)B(1,1)
-	src.mirror('y');
-	unsigned char *ptr = src.data();
-
-	unsigned int size = width * height;
-
-	unsigned char *mixed = new unsigned char[size * 4];
-
-	for (unsigned int i = 0; i < size; i++)
-	{
-		for (unsigned int j = 0; j < bpp; j++)
-		{
-			mixed[(i * 4) + j] = ptr[i + (j * size)];
-		}
-		mixed[(i * 4) + 3] = 255;
-	}
-
-	a_bpp = 4;
-
-	*a_data = mixed;
-}
 
 FORCE_INLINE std::vector<const char *> get_instance_extensions_requested()
 {
@@ -171,6 +140,11 @@ FORCE_INLINE constexpr uint32_t get_number_of_buffers()
 	return 3;        // Tripple buffering
 }
 
+FORCE_INLINE constexpr bool get_visualise_mipmaps()
+{
+	return false;
+}
+
 FORCE_INLINE auto get_vsync()
 {
 	// TODO: No vsync available on Android so when enabling make sure android is guarded
@@ -198,6 +172,83 @@ static VkAllocationCallbacks *VkAllocator = nullptr;
 
 namespace utl
 {
+struct Texture
+{
+	struct Mipmap
+	{
+		uint32_t m_width{0};
+		uint32_t m_height{0};
+		uint32_t m_depth{1};
+		uint64_t m_offset{0};
+	};
+
+	void allocate(uint64_t a_size)
+	{
+		this->m_size = a_size;
+		this->m_data.resize(this->m_size);
+	}
+
+	uint32_t get_width()
+	{
+		return this->m_mips[0].m_width;
+	}
+
+	uint32_t get_height()
+	{
+		return this->m_mips[0].m_height;
+	}
+
+	VkFormat get_format()
+	{
+		return this->m_format;
+	}
+
+	uint32_t get_mip_levels()
+	{
+		return ror::static_cast_safe<uint32_t>(this->m_mips.size());
+	}
+
+	std::vector<uint8_t> m_data;                                   // All mipmaps data, TODO: copying should be prevented
+	uint64_t             m_size{0};                                // Size of all mipmaps combined
+	VkFormat             m_format{VK_FORMAT_R8G8B8A8_SRGB};        // Texture format
+	std::vector<Mipmap>  m_mips;                                   // Have at least one level
+};
+
+inline void read_texture_from_file_cimg(const char *a_file_name, Texture &a_texture)
+{
+	cimg_library::CImg<unsigned char> src(a_file_name);
+
+	unsigned int width  = static_cast<uint32_t>(src.width());
+	unsigned int height = static_cast<uint32_t>(src.height());
+	unsigned int bpp    = static_cast<uint32_t>(src.spectrum());
+
+	// Data is not stored like traditional RGBRGBRGBRGB triplets but rater RRRRGGGGBBBB
+	// In other words R(0,0)R(1,0)R(0,1)R(1,1)G(0,0)G(1,0)G(0,1)G(1,1)B(0,0)B(1,0)B(0,1)B(1,1)
+	src.mirror('y');
+	unsigned char *ptr = src.data();
+
+	unsigned int size = width * height;
+
+	a_texture.allocate(size * 4);
+	unsigned char *mixed = a_texture.m_data.data();
+
+	for (unsigned int i = 0; i < size; i++)
+	{
+		for (unsigned int j = 0; j < bpp; j++)
+		{
+			mixed[(i * 4) + j] = ptr[i + (j * size)];
+		}
+		mixed[(i * 4) + 3] = 255;
+	}
+
+	Texture::Mipmap mip0;
+	mip0.m_width       = width;
+	mip0.m_height      = height;
+	a_texture.m_format = VK_FORMAT_B8G8R8A8_SRGB;
+
+	a_texture.m_mips.emplace_back(mip0);
+}
+
 // Not safe for unsigned to signed conversion but the compiler will complain about that
 template <class _type_to,
 		  class _type_from,
@@ -214,8 +265,11 @@ FORCE_INLINE _type_to static_cast_safe(_type_from a_value)
 	return static_cast<_type_to>(a_value);
 }
 
-// Loads data at sizeof(uint32_t) aligned address
-inline bool align_load_file(const std::string &a_file_path, char **a_buffer, size_t &a_bytes_read)
+// Loads data at 8 bytes aligned address
+using bytes_vector = std::vector<uint8_t>;
+static_assert(alignof(bytes_vector) == 8, "Bytes vector not aligned to 8 bytes");
+
+inline bool align_load_file(const std::string &a_file_path, bytes_vector &a_buffer)
 {
 	std::ifstream file(a_file_path, std::ios::in | std::ios::ate | std::ios::binary);
 
@@ -234,23 +288,243 @@ inline bool align_load_file(const std::string &a_file_path, char **a_buffer, siz
 		return false;
 	}
 
-	uint32_t *aligned_pointer = new uint32_t[static_cast<size_t>(file_size) / sizeof(uint32_t)];
+	a_buffer.resize(static_cast<size_t>(file_size));
 
-	*a_buffer = reinterpret_cast<char *>(aligned_pointer);
-
-	if (*a_buffer == nullptr)
-	{
-		std::cout << "Error! Out of memory allocating *a_buffer" << std::endl;
-		return false;
-	}
-
-	file.read(*a_buffer, file_size);
+	file.read(reinterpret_cast<char *>(a_buffer.data()), file_size);
 	file.close();
-
-	a_bytes_read = static_cast<size_t>(file_size);
 
 	return true;
 }
+
+inline VkFormat basis_to_vk_format(basist::transcoder_texture_format a_fmt)
+{
+	switch (a_fmt)
+	{
+		case basist::transcoder_texture_format::cTFASTC_4x4:
+			return VK_FORMAT_ASTC_4x4_SRGB_BLOCK;
+		case basist::transcoder_texture_format::cTFBC7_RGBA:
+			return VK_FORMAT_BC7_SRGB_BLOCK;
+		case basist::transcoder_texture_format::cTFRGBA32:
+			return VK_FORMAT_R8G8B8A8_SRGB;
+		case basist::transcoder_texture_format::cTFETC1_RGB:
+		case basist::transcoder_texture_format::cTFETC2_RGBA:
+		case basist::transcoder_texture_format::cTFBC1_RGB:
+		case basist::transcoder_texture_format::cTFBC3_RGBA:
+		case basist::transcoder_texture_format::cTFBC4_R:
+		case basist::transcoder_texture_format::cTFBC5_RG:
+		case basist::transcoder_texture_format::cTFPVRTC1_4_RGB:
+		case basist::transcoder_texture_format::cTFPVRTC1_4_RGBA:
+		case basist::transcoder_texture_format::cTFATC_RGB:
+		case basist::transcoder_texture_format::cTFATC_RGBA:
+		case basist::transcoder_texture_format::cTFFXT1_RGB:
+		case basist::transcoder_texture_format::cTFPVRTC2_4_RGB:
+		case basist::transcoder_texture_format::cTFPVRTC2_4_RGBA:
+		case basist::transcoder_texture_format::cTFETC2_EAC_R11:
+		case basist::transcoder_texture_format::cTFETC2_EAC_RG11:
+		case basist::transcoder_texture_format::cTFRGB565:
+		case basist::transcoder_texture_format::cTFBGR565:
+		case basist::transcoder_texture_format::cTFRGBA4444:
+		case basist::transcoder_texture_format::cTFBC7_ALT:
+		case basist::transcoder_texture_format::cTFTotalTextureFormats:
+			ror::log_critical("Format not supported yet!, add support before continuing.");
+			return VK_FORMAT_R8G8B8A8_SRGB;
+	}
+
+	return VK_FORMAT_B8G8R8A8_SRGB;
+}
+
+inline Texture read_texture_from_file(const char *a_file_name)
+{
+	std::filesystem::path file_name{a_file_name};
+
+	Texture texture;
+
+	// TODO: Cleanup
+
+	if (file_name.extension() == ".ktx2")
+	{
+		// FIXME: Should only be called once per execution
+		basist::basisu_transcoder_init();
+
+		std::vector<uint8_t> ktx2_file_data;
+		if (!utl::align_load_file(file_name, ktx2_file_data))
+		{
+			ror::log_critical("Failed to load texture file {}", file_name.c_str());
+			return texture;
+		}
+
+		// Should be done for each transcode
+		basist::etc1_global_selector_codebook sel_codebook(basist::g_global_selector_cb_size, basist::g_global_selector_cb);
+		basist::ktx2_transcoder               dec(&sel_codebook);
+
+		if (!dec.init(ktx2_file_data.data(), static_cast_safe<uint32_t>(ktx2_file_data.size())))
+		{
+			ror::log_critical("Basis transcode init failed.");
+			return texture;
+		}
+
+		if (!dec.start_transcoding())
+		{
+			ror::log_critical("Basis start_transcoding failed.");
+			return texture;
+		}
+
+		printf("Resolution: %ux%u\n", dec.get_width(), dec.get_height());
+		printf("Mipmap Levels: %u\n", dec.get_levels());
+		printf("Texture Array Size (layers): %u\n", dec.get_layers());
+		printf("Total Faces: %u (%s)\n", dec.get_faces(), (dec.get_faces() == 6) ? "CUBEMAP" : "2D");
+		printf("Is Texture Video: %u\n", dec.is_video());
+
+		const bool is_etc1s = dec.get_format() == basist::basis_tex_format::cETC1S;
+		printf("Supercompression Format: %s\n", is_etc1s ? "ETC1S" : "UASTC");
+
+		printf("Supercompression Scheme: ");
+		switch (dec.get_header().m_supercompression_scheme)
+		{
+			case basist::KTX2_SS_NONE:
+				printf("NONE\n");
+				break;
+			case basist::KTX2_SS_BASISLZ:
+				printf("BASISLZ\n");
+				break;
+			case basist::KTX2_SS_ZSTANDARD:
+				printf("ZSTANDARD\n");
+				break;
+			default:
+				printf("Invalid/unknown/unsupported\n");
+				return texture;
+		}
+
+		printf("Has Alpha: %u\n", static_cast<uint32_t>(dec.get_has_alpha()));
+		printf("Levels:\n");
+
+		for (uint32_t i = 0; i < dec.get_levels(); i++)
+		{
+			printf("%u. Offset: %llu, Length: %llu, Uncompressed Length: %llu\n",
+				   i, static_cast<long long unsigned int>(dec.get_level_index()[i].m_byte_offset),
+				   static_cast<long long unsigned int>(dec.get_level_index()[i].m_byte_length),
+				   static_cast<long long unsigned int>(dec.get_level_index()[i].m_uncompressed_byte_length));
+		}
+
+		basist::transcoder_texture_format tex_fmt = basist::transcoder_texture_format::cTFBC7_RGBA;
+		// basist::transcoder_texture_format tex_fmt = basist::transcoder_texture_format::cTFRGBA32;
+
+		// Use this for your format
+		bool compressed = !basist::basis_transcoder_format_is_uncompressed(tex_fmt);
+
+		if (!basis_is_format_supported(tex_fmt, dec.get_format()))
+		{
+			//Error not supported transcoder format
+			ror::log_critical("Requested transcoded format not supported {}", basis_to_vk_format(tex_fmt));
+			return texture;
+		}
+
+		const uint32_t total_layers       = std::max(1u, dec.get_layers());
+		uint64_t       mips_size          = 0;
+		uint64_t       decoded_block_size = basisu::get_qwords_per_block(basist::basis_get_basisu_texture_format(tex_fmt)) * sizeof(uint64_t);
+
+		for (uint32_t level_index = 0; level_index < dec.get_levels(); level_index++)
+		{
+			for (uint32_t layer_index = 0; layer_index < total_layers; layer_index++)
+			{
+				for (uint32_t face_index = 0; face_index < dec.get_faces(); face_index++)
+				{
+					basist::ktx2_image_level_info level_info;
+
+					if (!dec.get_image_level_info(level_info, level_index, layer_index, face_index))
+					{
+						printf("Failed retrieving image level information (%u %u %u)!\n", layer_index, level_index, face_index);
+						return texture;
+					}
+
+					if (compressed)
+						mips_size += decoded_block_size * level_info.m_total_blocks;
+					else
+						mips_size += level_info.m_orig_height * level_info.m_orig_width * 4;        // FIXME: Only works for RGBA32 uncompressed format
+				}
+			}
+		}
+
+		texture.allocate(mips_size);
+		texture.m_format = basis_to_vk_format(tex_fmt);
+
+		uint8_t *decoded_data = texture.m_data.data();
+		uint64_t mip_offset   = 0;
+
+		std::vector<ror::Vector3f> colors{
+			{1.0f, 0.0f, 0.0f},
+			{0.0f, 1.0f, 0.0f},
+			{0.0f, 0.0f, 1.0f},
+			{1.0f, 1.0f, 0.0f},
+			{1.0f, 0.0f, 1.0f},
+			{0.0f, 1.0f, 1.0f},
+			{0.0f, 0.0f, 0.0f},
+			{1.0f, 1.0f, 1.0f},
+			{1.0f, 0.0f, 0.0f},
+			{0.0f, 0.0f, 1.0f}};
+
+		for (uint32_t level_index = 0; level_index < dec.get_levels(); level_index++)
+		{
+			for (uint32_t layer_index = 0; layer_index < total_layers; layer_index++)
+			{
+				for (uint32_t face_index = 0; face_index < dec.get_faces(); face_index++)
+				{
+					basist::ktx2_image_level_info level_info;
+
+					if (!dec.get_image_level_info(level_info, level_index, layer_index, face_index))
+					{
+						ror::log_critical("Failed retrieving image level information {}, {}, {}", layer_index, level_index, face_index);
+						return texture;
+					}
+
+					uint32_t decode_flags = 0;
+					uint64_t decode_size = level_info.m_orig_height * level_info.m_orig_width * 4; // FIXME: Only works for RGBA
+
+					if (compressed)
+						decode_size = decoded_block_size * level_info.m_total_blocks;
+
+					if (!dec.transcode_image_level(level_index, layer_index, face_index, decoded_data + mip_offset, (compressed ? level_info.m_total_blocks : static_cast<uint32_t>(decode_size)), tex_fmt, decode_flags))
+					{
+						ror::log_critical("Failed transcoding image level {}, {}, {}, {}", layer_index, level_index, face_index, tex_fmt);
+						return texture;
+					}
+
+					Texture::Mipmap mip;
+					mip.m_width  = level_info.m_orig_width;
+					mip.m_height = level_info.m_orig_height;
+					mip.m_offset = mip_offset;
+
+					texture.m_mips.emplace_back(mip);
+
+					if (cfg::get_visualise_mipmaps())
+					{
+						for (size_t i = 0; i < decode_size; i += 4) // FIXME: Only works for RGBA
+						{
+							uint8_t cs[3];
+
+							cs[0] = static_cast_safe<uint8_t>(colors[level_index % 10].x * 255);
+							cs[1] = static_cast_safe<uint8_t>(colors[level_index % 10].y * 255);
+							cs[2] = static_cast_safe<uint8_t>(colors[level_index % 10].z * 255);
+
+							decoded_data[mip_offset + i + 0] = cs[0];
+							decoded_data[mip_offset + i + 1] = cs[1];
+							decoded_data[mip_offset + i + 2] = cs[2];
+						}
+					}
+
+					mip_offset += decode_size;
+				}
+			}
+		}
+	}
+	else
+	{
+		read_texture_from_file_cimg(a_file_name, texture);
+	}
+
+	return texture;
+}
+
 }        // namespace utl
 
 namespace vkd
@@ -920,7 +1194,6 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->create_vertex_buffers();
 		this->create_uniform_buffers();
 		this->create_texture();
-		this->create_texture_sampler();
 		this->create_descriptor_sets();
 
 		this->record_command_buffers();
@@ -1311,17 +1584,16 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 	VkShaderModule create_shader_module(std::string a_shader_path)
 	{
-		char * shader_code;
-		size_t shader_size;
+		utl::bytes_vector shader_code;
 
-		utl::align_load_file(a_shader_path, &shader_code, shader_size);
+		utl::align_load_file(a_shader_path, shader_code);
 
 		VkShaderModuleCreateInfo shader_module_info = {};
 		shader_module_info.sType                    = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
 		shader_module_info.pNext                    = nullptr;
 		shader_module_info.flags                    = 0;
-		shader_module_info.codeSize                 = shader_size;
-		shader_module_info.pCode                    = reinterpret_cast<uint32_t *>(shader_code);
+		shader_module_info.codeSize                 = shader_code.size();
+		shader_module_info.pCode                    = reinterpret_cast<uint32_t *>(shader_code.data());
 
 		VkShaderModule shader_module;
 		VkResult       result = vkCreateShaderModule(this->m_device, &shader_module_info, cfg::VkAllocator, &shader_module);
@@ -1916,7 +2188,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 	auto create_buffer(size_t a_size, VkBufferUsageFlags a_usage)
 	{
-		// TODO: Change default behaviour of charing between transfer and graphics only
+		// TODO: Change default behaviour of sharing between transfer and graphics only
 		std::vector<uint32_t> indicies{this->m_graphics_queue_index, this->m_transfer_queue_index};
 
 		VkBufferCreateInfo buffer_info{};
@@ -1924,9 +2196,9 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		buffer_info.sType                 = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
 		buffer_info.pNext                 = nullptr;
 		buffer_info.flags                 = 0;
-		buffer_info.size                  = a_size;                            // 1024 * 1024 * 2;        // 2kb
-		buffer_info.usage                 = a_usage;                           // VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT
-		buffer_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;        // VK_SHARING_MODE_EXCLUSIVE; // TODO: Make this more variable, this has performance implications, not all resources are shared either
+		buffer_info.size                  = a_size;                            // example: 1024 * 1024 * 2;        // 2kb
+		buffer_info.usage                 = a_usage;                           // example: VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_INDEX_BUFFER_BIT
+		buffer_info.sharingMode           = VK_SHARING_MODE_CONCURRENT;        // example: VK_SHARING_MODE_EXCLUSIVE; // TODO: Make this more variable, this has performance implications, not all resources are shared either
 		buffer_info.queueFamilyIndexCount = ror::static_cast_safe<uint32_t>(indicies.size());
 		buffer_info.pQueueFamilyIndices   = indicies.data();
 
@@ -2071,18 +2343,18 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		// TODO: Could be done in one go
 		for (size_t i = 0; i < a_source.size(); ++i)
 		{
-			VkBufferCopy buffer_copy_region{};
-			buffer_copy_region.srcOffset = 0;        // Optional
-			buffer_copy_region.dstOffset = 0;        // Optional
-			buffer_copy_region.size      = a_source[i].second;
+			VkBufferCopy buffer_image_copy_region{};
+			buffer_image_copy_region.srcOffset = 0;        // Optional
+			buffer_image_copy_region.dstOffset = 0;        // Optional
+			buffer_image_copy_region.size      = a_source[i].second;
 
-			vkCmdCopyBuffer(staging_command_buffer, a_source[i].first, a_destination[i], 1, &buffer_copy_region);
+			vkCmdCopyBuffer(staging_command_buffer, a_source[i].first, a_destination[i], 1, &buffer_image_copy_region);
 		}
 
 		this->end_single_use_cmd_buffer(staging_command_buffer);
 	}
 
-	void transition_image_layout(VkImage a_image, VkFormat a_format, VkImageLayout a_old_layout, VkImageLayout a_new_layout)
+	void transition_image_layout(VkImage a_image, VkFormat a_format, VkImageLayout a_old_layout, VkImageLayout a_new_layout, uint32_t a_mip_levels)
 	{
 		(void) a_format;
 
@@ -2100,7 +2372,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		barrier.image                           = a_image;
 		barrier.subresourceRange.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
 		barrier.subresourceRange.baseMipLevel   = 0;
-		barrier.subresourceRange.levelCount     = 1;
+		barrier.subresourceRange.levelCount     = a_mip_levels;
 		barrier.subresourceRange.baseArrayLayer = 0;
 		barrier.subresourceRange.layerCount     = 1;
 		barrier.srcAccessMask                   = 0;        // TODO
@@ -2132,30 +2404,39 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->end_single_use_cmd_buffer(command_buffer);
 	}
 
-	void copy_from_staging_buffers_to_images(std::vector<std::pair<VkBuffer, std::pair<uint32_t, uint32_t>>> &a_source, std::vector<VkImage> &a_destination)
+	// This is taking std::vectors instead of VkBuffer and VkImage so that we only use single cmdbuffer
+	void copy_from_staging_buffers_to_images(std::vector<VkBuffer> &a_source, std::vector<VkImage> &a_destination, utl::Texture a_texture)
 	{
 		VkCommandBuffer staging_command_buffer = this->begin_single_use_cmd_buffer();
 
 		if (a_source.size() != a_destination.size())
 			ror::log_critical("Copying from different size a_source to a_destination, something won't be copied correctly");
 
-		// TODO: Could be done in one go
+		// TODO: Could this be done in one go?, i.e. remove this loop?
 		for (size_t i = 0; i < a_source.size(); ++i)
 		{
-			VkBufferImageCopy image_copy_region{};
+			std::vector<VkBufferImageCopy> buffer_image_copy_regions{};
 
-			image_copy_region.bufferOffset      = 0;
-			image_copy_region.bufferRowLength   = 0;
-			image_copy_region.bufferImageHeight = 0;
+			for (uint32_t j = 0; j < a_texture.get_mip_levels(); j++)
+			{
+				VkBufferImageCopy buffer_image_copy_region{};
 
-			image_copy_region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-			image_copy_region.imageSubresource.mipLevel       = 0;
-			image_copy_region.imageSubresource.baseArrayLayer = 0;
-			image_copy_region.imageSubresource.layerCount     = 1;
-			image_copy_region.imageOffset                     = {0, 0, 0};
-			image_copy_region.imageExtent                     = {a_source[i].second.first, a_source[i].second.second, 1};
+				buffer_image_copy_region.bufferRowLength   = 0;
+				buffer_image_copy_region.bufferImageHeight = 0;
 
-			vkCmdCopyBufferToImage(staging_command_buffer, a_source[i].first, a_destination[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &image_copy_region);
+				buffer_image_copy_region.bufferOffset                    = a_texture.m_mips[j].m_offset;
+				buffer_image_copy_region.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
+				buffer_image_copy_region.imageSubresource.mipLevel       = j;
+				buffer_image_copy_region.imageSubresource.baseArrayLayer = 0;
+				buffer_image_copy_region.imageSubresource.layerCount     = 1;
+				buffer_image_copy_region.imageOffset                     = {0, 0, 0};
+				buffer_image_copy_region.imageExtent                     = {a_texture.m_mips[j].m_width, a_texture.m_mips[j].m_height, 1};
+
+				buffer_image_copy_regions.push_back(buffer_image_copy_region);
+			}
+
+			vkCmdCopyBufferToImage(staging_command_buffer, a_source[i], a_destination[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+								   utl::static_cast_safe<uint32_t>(buffer_image_copy_regions.size()), buffer_image_copy_regions.data());
 		}
 
 		this->end_single_use_cmd_buffer(staging_command_buffer);
@@ -2258,7 +2539,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->m_index_buffer      = nullptr;
 	}
 
-	VkImage create_image(uint32_t a_width, uint32_t a_height, VkFormat a_format, VkImageTiling a_tiling, VkImageUsageFlags a_usage)
+	VkImage create_image(uint32_t a_width, uint32_t a_height, VkFormat a_format, VkImageTiling a_tiling, VkImageUsageFlags a_usage, uint32_t a_mip_levels)
 	{
 		VkImageCreateInfo image_info{};
 		image_info.sType         = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
@@ -2266,7 +2547,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		image_info.extent.width  = a_width;
 		image_info.extent.height = a_height;
 		image_info.extent.depth  = 1;
-		image_info.mipLevels     = 1;
+		image_info.mipLevels     = a_mip_levels;
 		image_info.arrayLayers   = 1;
 		image_info.format        = a_format;
 		image_info.tiling        = a_tiling;
@@ -2314,45 +2595,38 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 	void create_texture()
 	{
-		uint8_t *data{nullptr};
-		uint32_t width, height, bpp, texture_size;
+		utl::Texture texture = utl::read_texture_from_file("./assets/astroboy/astro_boy_uastc.ktx2");
+		// Texture texture = utl::read_texture_from_file("./assets/astroboy/astro_boy.jpg");
 
-		cfg::read_texture_from_file("./assets/astroboy/astro_boy.jpg", &data, width, height, bpp);
+		VkBuffer       staging_buffer{};
+		VkDeviceMemory staging_buffer_memory{};
 
-		texture_size = width * height * bpp;
-
-		std::pair<VkBuffer, std::pair<uint32_t, uint32_t>> staging_buffer{};
-		VkDeviceMemory                                     staging_buffer_memory{};
-
-		staging_buffer.first         = this->create_buffer(texture_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
-		staging_buffer.second.first  = width;
-		staging_buffer.second.second = height;
-		staging_buffer_memory        = this->allocate_bind_buffer_memory(staging_buffer.first);
+		staging_buffer        = this->create_buffer(texture.m_size, VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+		staging_buffer_memory = this->allocate_bind_buffer_memory(staging_buffer);
 
 		uint8_t *texture_data;
 		vkMapMemory(this->m_device, staging_buffer_memory, 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void **>(&texture_data));
-		memcpy(texture_data, data, texture_size);
+		memcpy(texture_data, texture.m_data.data(), texture.m_size);
 		vkUnmapMemory(this->m_device, staging_buffer_memory);
 
-		this->m_texture_image        = this->create_image(width, height, (bpp == 4 ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8_SRGB), VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+		this->m_texture_image        = this->create_image(texture.get_width(), texture.get_height(), texture.get_format(), VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, texture.get_mip_levels());
 		this->m_texture_image_memory = this->allocate_bind_image_memory(this->m_texture_image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		this->m_texture_image_view   = this->create_image_view(this->m_texture_image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+		this->m_texture_image_view   = this->create_image_view(this->m_texture_image, texture.get_format(), VK_IMAGE_ASPECT_COLOR_BIT, texture.get_mip_levels());
 
-		std::vector<VkImage>                                            textures{this->m_texture_image};
-		std::vector<std::pair<VkBuffer, std::pair<uint32_t, uint32_t>>> source_textures{staging_buffer};
+		std::vector<VkImage>  texture_images{this->m_texture_image};
+		std::vector<VkBuffer> source_textures{staging_buffer};
 
-		this->transition_image_layout(this->m_texture_image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-		this->copy_from_staging_buffers_to_images(source_textures, textures);
-		this->transition_image_layout(this->m_texture_image, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+		this->transition_image_layout(this->m_texture_image, texture.get_format(), VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, texture.get_mip_levels());
+		this->copy_from_staging_buffers_to_images(source_textures, texture_images, texture);
+		this->transition_image_layout(this->m_texture_image, texture.get_format(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, texture.get_mip_levels());
+		this->create_texture_sampler(static_cast<float32_t>(texture.get_mip_levels()));
 
 		// Cleanup staging buffers
-		vkDestroyBuffer(this->m_device, staging_buffer.first, cfg::VkAllocator);
+		vkDestroyBuffer(this->m_device, staging_buffer, cfg::VkAllocator);
 		vkFreeMemory(this->m_device, staging_buffer_memory, cfg::VkAllocator);
 
-		staging_buffer.first  = nullptr;
+		staging_buffer        = nullptr;
 		staging_buffer_memory = nullptr;
-
-		delete[] data;
 	}
 
 	void destroy_texture()
@@ -2363,7 +2637,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		vkFreeMemory(this->m_device, this->m_texture_image_memory, cfg::VkAllocator);
 	}
 
-	void create_texture_sampler()
+	void create_texture_sampler(float a_mip_levels)
 	{
 		VkSamplerCreateInfo sampler_info{};
 
@@ -2386,7 +2660,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		sampler_info.mipmapMode    = VK_SAMPLER_MIPMAP_MODE_LINEAR;
 		sampler_info.mipLodBias    = 0.0f;
 		sampler_info.minLod        = 0.0f;
-		sampler_info.maxLod        = 0.0f;
+		sampler_info.maxLod        = a_mip_levels;
 
 		VkResult result = vkCreateSampler(this->m_device, &sampler_info, nullptr, &this->m_texture_sampler);
 		assert(result == VK_SUCCESS);
@@ -2425,7 +2699,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		this->destroy_swapchain();
 	}
 
-	VkImageView create_image_view(VkImage a_image, VkFormat a_format, VkImageAspectFlags a_aspect_flags)
+	VkImageView create_image_view(VkImage a_image, VkFormat a_format, VkImageAspectFlags a_aspect_flags, uint32_t a_mip_levels)
 	{
 		VkImageViewCreateInfo image_view_create_info = {};
 		image_view_create_info.sType                 = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
@@ -2442,7 +2716,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 		image_view_create_info.subresourceRange.aspectMask     = a_aspect_flags;        //VK_IMAGE_ASPECT_COLOR_BIT;
 		image_view_create_info.subresourceRange.baseMipLevel   = 0;
-		image_view_create_info.subresourceRange.levelCount     = 1;
+		image_view_create_info.subresourceRange.levelCount     = a_mip_levels;
 		image_view_create_info.subresourceRange.baseArrayLayer = 0;
 		image_view_create_info.subresourceRange.layerCount     = 1;
 
@@ -2465,7 +2739,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 		for (size_t i = 0; i < this->m_swapchain_images.size(); ++i)
 		{
-			this->m_swapchain_image_views[i] = this->create_image_view(this->m_swapchain_images[i], this->m_swapchain_format, VK_IMAGE_ASPECT_COLOR_BIT);
+			this->m_swapchain_image_views[i] = this->create_image_view(this->m_swapchain_images[i], this->m_swapchain_format, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 		}
 	}
 
@@ -2481,9 +2755,9 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	void create_depth_buffer()
 	{
 		VkFormat depth_format      = VK_FORMAT_D24_UNORM_S8_UINT;        // TODO: Make more generic and flexible
-		this->m_depth_image        = this->create_image(this->m_swapchain_extent.width, this->m_swapchain_extent.height, VK_FORMAT_D24_UNORM_S8_UINT, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT);
+		this->m_depth_image        = this->create_image(this->m_swapchain_extent.width, this->m_swapchain_extent.height, VK_FORMAT_D24_UNORM_S8_UINT, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, 1);
 		this->m_depth_image_memory = this->allocate_bind_image_memory(this->m_depth_image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
-		this->m_depth_image_view   = this->create_image_view(this->m_depth_image, depth_format, VK_IMAGE_ASPECT_DEPTH_BIT);
+		this->m_depth_image_view   = this->create_image_view(this->m_depth_image, depth_format, VK_IMAGE_ASPECT_DEPTH_BIT, 1);
 	}
 
 	void destroy_depth_buffer()
