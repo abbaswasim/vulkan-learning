@@ -1616,7 +1616,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 
 		for (size_t i = 0; i < this->m_swapchain_image_views.size(); i++)
 		{
-			std::array<VkImageView, 3> attachments{this->m_swapchain_image_views[i], this->m_depth_image_view, this->m_msaa_color_image_view};
+			std::array<VkImageView, 3> attachments{this->m_msaa_color_image_view, this->m_depth_image_view, this->m_swapchain_image_views[i]};
 
 			VkFramebufferCreateInfo framebuffer_info = {};
 			framebuffer_info.sType                   = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
@@ -2812,8 +2812,6 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	{
 		// TODO: Called multiple times, should be cached
 		VkSampleCountFlagBits samples = this->get_sample_count();
-
-		ror::log_critical("Enabling color multi-sampling I got sampels = {}", samples);
 
 		this->m_msaa_color_image        = this->create_image(this->m_swapchain_extent.width, this->m_swapchain_extent.height, this->m_swapchain_format, VK_IMAGE_TILING_OPTIMAL,
 													  VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 1, samples);
