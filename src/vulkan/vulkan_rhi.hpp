@@ -150,6 +150,17 @@ FORCE_INLINE constexpr uint32_t get_multisample_count()
 	return 8;
 }
 
+FORCE_INLINE constexpr bool get_sample_rate_shading_enabled()
+{
+	return false;
+}
+
+FORCE_INLINE constexpr float get_sample_rate_shading()
+{
+	return 0.5f;
+}
+
+
 FORCE_INLINE auto get_vsync()
 {
 	// TODO: No vsync available on Android so when enabling make sure android is guarded
@@ -1420,6 +1431,11 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		// TODO: Select properties/features you need here
 		vkGetPhysicalDeviceFeatures(this->m_physical_device, &this->m_physical_device_features);
 
+		if (cfg::get_sample_rate_shading_enabled())
+		{
+			assert(this->m_physical_device_features.sampleRateShading == VK_TRUE && "Sample Rate Shading not avialable");
+		}
+
 		VkDeviceCreateInfo       device_create_info{};
 		std::vector<float32_t *> priorities_pointers;
 		QueueData                queue_data{};
@@ -1437,8 +1453,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		device_create_info.ppEnabledLayerNames     = layers.data();
 		device_create_info.enabledExtensionCount   = utl::static_cast_safe<uint32_t>(extensions.size());
 		device_create_info.ppEnabledExtensionNames = extensions.data();
-		// device_create_info.pEnabledFeatures        = &this->m_physical_device_features;
-		device_create_info.pEnabledFeatures = nullptr;
+		device_create_info.pEnabledFeatures        = &this->m_physical_device_features; // TODO: Shouldn't use this, just use what you need not everything available
+		// device_create_info.pEnabledFeatures = nullptr;
 
 		auto result = vkCreateDevice(this->m_physical_device, &device_create_info, cfg::VkAllocator, &this->m_device);
 		assert(result == VK_SUCCESS);
@@ -1894,8 +1910,8 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		pipeline_multisampling_state_info.pNext                                = nullptr;
 		pipeline_multisampling_state_info.flags                                = 0;
 		pipeline_multisampling_state_info.rasterizationSamples                 = this->get_sample_count();
-		pipeline_multisampling_state_info.sampleShadingEnable                  = VK_FALSE;
-		pipeline_multisampling_state_info.minSampleShading                     = 1.0f;            // Optional
+		pipeline_multisampling_state_info.sampleShadingEnable                  = (cfg::get_sample_rate_shading_enabled() ? VK_TRUE : VK_FALSE);
+		pipeline_multisampling_state_info.minSampleShading                     = (cfg::get_sample_rate_shading_enabled() ? cfg::get_sample_rate_shading() : 1.0f);
 		pipeline_multisampling_state_info.pSampleMask                          = nullptr;         // Optional
 		pipeline_multisampling_state_info.alphaToCoverageEnable                = VK_FALSE;        // Optional
 		pipeline_multisampling_state_info.alphaToOneEnable                     = VK_FALSE;        // Optional
