@@ -80,6 +80,8 @@ set(VULKANED_REQUIRED_LIBRARIES_SYSTEM
   vulkan_headers
   roar
   Vulkan::Vulkan
+  cgltf
+  ctpl
   cimage
   basisu
   glfw)
