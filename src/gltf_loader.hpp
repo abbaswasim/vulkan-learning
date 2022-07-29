@@ -184,7 +184,7 @@ class ROAR_ENGINE_ITEM GLTFModel
 
 			std::vector<std::future<utl::TextureImage>> future_texures{data->images_count};
 
-			auto lambda = [&](int a_thread_id, std::filesystem::path& a_texture_path) -> utl::TextureImage {
+			auto lambda = [&](int a_thread_id,const std::filesystem::path& a_texture_path) -> utl::TextureImage {
 				(void) a_thread_id;
 
 				// ror::log_critical("Going to load texture {}", a_texture_path.c_str());

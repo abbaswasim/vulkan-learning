@@ -25,8 +25,8 @@
 
 #pragma once
 
-#include <foundation/rormacros.hpp>
 #include "common.hpp"
+#include <foundation/rormacros.hpp>
 
 #include <string>
 #include <vector>
@@ -63,13 +63,14 @@ FORCE_INLINE std::vector<const char *> get_instance_extensions_requested()
 	return std::vector<const char *>
 	{
 		VK_KHR_SURFACE_EXTENSION_NAME,                                     // VK_KHR_surface
-			VK_KHR_DISPLAY_EXTENSION_NAME,                                 // VK_KHR_display
-			VK_EXT_DEBUG_UTILS_EXTENSION_NAME,                             // VK_EXT_debug_utils
-			VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,        // VK_KHR_get_physical_device_properties2
+		    VK_KHR_DISPLAY_EXTENSION_NAME,                                 // VK_KHR_display
+		    VK_EXT_DEBUG_UTILS_EXTENSION_NAME,                             // VK_EXT_debug_utils
+		    VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME,        // VK_KHR_get_physical_device_properties2
+		    VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,                 // VK_KHR_portability_enumeration"
 #if defined __APPLE__
-			VK_EXT_METAL_SURFACE_EXTENSION_NAME,        // "VK_EXT_metal_surface"
+		    VK_EXT_METAL_SURFACE_EXTENSION_NAME,        // "VK_EXT_metal_surface"
 #elif defined __linux__
-			VK_KHR_XCB_SURFACE_EXTENSION_NAME        // "VK_EXT_xcb_surface??"
+		    VK_KHR_XCB_SURFACE_EXTENSION_NAME        // "VK_EXT_xcb_surface??"
 #endif
 	};
 }
@@ -86,8 +87,8 @@ FORCE_INLINE std::vector<const char *> get_instance_layers_requested()
 FORCE_INLINE std::vector<const char *> get_device_extensions_requested()
 {
 	return std::vector<const char *>{
-		VK_KHR_SWAPCHAIN_EXTENSION_NAME,                // VK_KHR_swapchain
-		VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME        // "VK_KHR_portability_subset"
+	    VK_KHR_SWAPCHAIN_EXTENSION_NAME,                // VK_KHR_swapchain
+	    VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME        // "VK_KHR_portability_subset"
 	};
 }
 
@@ -121,7 +122,6 @@ FORCE_INLINE constexpr float get_sample_rate_shading()
 {
 	return 0.5f;
 }
-
 
 FORCE_INLINE auto get_vsync()
 {

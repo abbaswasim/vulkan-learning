@@ -65,8 +65,8 @@
 #include <utility>
 #include <vector>
 
-#include "utils.hpp"
 #include "gltf_loader.hpp"
+#include "utils.hpp"
 
 class VulkanApplication;
 
@@ -104,10 +104,10 @@ FORCE_INLINE auto get_surface_transform()
 FORCE_INLINE auto get_surface_composition_mode()
 {
 	return (cfg::get_window_transparent() ?
-				(cfg::get_window_premultiplied() ?
-					 VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR :
-					 VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR) :
-				VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
+	            (cfg::get_window_premultiplied() ?
+	                 VK_COMPOSITE_ALPHA_PRE_MULTIPLIED_BIT_KHR :
+	                 VK_COMPOSITE_ALPHA_POST_MULTIPLIED_BIT_KHR) :
+	            VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR);
 }
 
 FORCE_INLINE auto get_swapchain_usage()
@@ -157,10 +157,10 @@ inline auto glfw_get_buffer_size(GLFWwindow *a_window)
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vk_debug_generic_callback(
-	VkDebugUtilsMessageSeverityFlagBitsEXT      a_message_severity,
-	VkDebugUtilsMessageTypeFlagsEXT             a_message_type,
-	const VkDebugUtilsMessengerCallbackDataEXT *a_callback_data,
-	void *                                      a_user_data)
+    VkDebugUtilsMessageSeverityFlagBitsEXT      a_message_severity,
+    VkDebugUtilsMessageTypeFlagsEXT             a_message_type,
+    const VkDebugUtilsMessengerCallbackDataEXT *a_callback_data,
+    void                                       *a_user_data)
 {
 	(void) a_message_type;
 	(void) a_user_data;
@@ -309,10 +309,10 @@ std::vector<const char *> enumerate_properties(_type a_context = nullptr)
 	for (const auto &property_requested : properties_requested)
 	{
 		if (std::find_if(properties.begin(),
-						 properties.end(),
-						 [&property_requested](properties_type<_property> &arg) {
-							 return std::strcmp(get_properties_type_name(arg).c_str(), property_requested) == 0;
-						 }) != properties.end())
+		                 properties.end(),
+		                 [&property_requested](properties_type<_property> &arg) {
+			                 return std::strcmp(get_properties_type_name(arg).c_str(), property_requested) == 0;
+		                 }) != properties.end())
 		{
 			properties_available.emplace_back(property_requested);
 		}
@@ -373,10 +373,10 @@ const uint32_t sparse_index{3};
 const uint32_t protected_index{4};
 
 const std::vector<VkQueueFlags> all_family_flags{VK_QUEUE_GRAPHICS_BIT,
-												 VK_QUEUE_COMPUTE_BIT,
-												 VK_QUEUE_TRANSFER_BIT,
-												 VK_QUEUE_SPARSE_BINDING_BIT,
-												 VK_QUEUE_PROTECTED_BIT};
+                                                 VK_QUEUE_COMPUTE_BIT,
+                                                 VK_QUEUE_TRANSFER_BIT,
+                                                 VK_QUEUE_SPARSE_BINDING_BIT,
+                                                 VK_QUEUE_PROTECTED_BIT};
 
 struct QueueData
 {
@@ -395,8 +395,8 @@ inline auto get_dedicated_queue_family(std::vector<VkQueueFamilyProperties> &a_q
 	for (auto &queue_family : a_queue_families)
 	{
 		if (((queue_family.queueFlags & a_queue_flag) == a_queue_flag) &&
-			(queue_family.queueCount > 0) &&
-			!((queue_family.queueFlags & a_others) == a_others))
+		    (queue_family.queueCount > 0) &&
+		    !((queue_family.queueFlags & a_others) == a_others))
 		{
 			a_index = index;
 			queue_family.queueCount--;
@@ -555,16 +555,16 @@ template <typename _type>
 class VulkanObject
 {
   public:
-	FORCE_INLINE VulkanObject()                                = default;                   //! Default constructor
-	FORCE_INLINE VulkanObject(const VulkanObject &a_other)     = default;                   //! Copy constructor
-	FORCE_INLINE VulkanObject(VulkanObject &&a_other) noexcept = default;                   //! Move constructor
-	FORCE_INLINE VulkanObject &operator=(const VulkanObject &a_other) = default;            //! Copy assignment operator
-	FORCE_INLINE VulkanObject &operator=(VulkanObject &&a_other) noexcept = default;        //! Move assignment operator
-	FORCE_INLINE virtual ~VulkanObject() noexcept                         = default;        //! Destructor
+	FORCE_INLINE               VulkanObject()                                = default;        //! Default constructor
+	FORCE_INLINE               VulkanObject(const VulkanObject &a_other)     = default;        //! Copy constructor
+	FORCE_INLINE               VulkanObject(VulkanObject &&a_other) noexcept = default;        //! Move constructor
+	FORCE_INLINE VulkanObject &operator=(const VulkanObject &a_other)        = default;        //! Copy assignment operator
+	FORCE_INLINE VulkanObject &operator=(VulkanObject &&a_other) noexcept    = default;        //! Move assignment operator
+	FORCE_INLINE virtual ~VulkanObject() noexcept                            = default;        //! Destructor
 
 	// Will/Should be called by all derived classes to initialize m_handle, it can't be default initialized
 	FORCE_INLINE VulkanObject(_type handle) :
-		m_handle(handle)
+	    m_handle(handle)
 	{}
 
 	FORCE_INLINE _type get_handle()
@@ -590,9 +590,9 @@ class VulkanObject
 class Instance : public VulkanObject<VkInstance>
 {
   public:
-	FORCE_INLINE Instance(const Instance &a_other)     = default;                   //! Copy constructor
-	FORCE_INLINE Instance(Instance &&a_other) noexcept = default;                   //! Move constructor
-	FORCE_INLINE Instance &operator=(const Instance &a_other) = default;            //! Copy assignment operator
+	FORCE_INLINE           Instance(const Instance &a_other)      = default;        //! Copy constructor
+	FORCE_INLINE           Instance(Instance &&a_other) noexcept  = default;        //! Move constructor
+	FORCE_INLINE Instance &operator=(const Instance &a_other)     = default;        //! Copy assignment operator
 	FORCE_INLINE Instance &operator=(Instance &&a_other) noexcept = default;        //! Move assignment operator
 	FORCE_INLINE virtual ~Instance() noexcept override
 	{
@@ -619,12 +619,12 @@ class Instance : public VulkanObject<VkInstance>
 		debug_messenger_create_info.pNext = nullptr;
 
 		debug_messenger_create_info.messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT |
-													  VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
-													  VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
+		                                              VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT |
+		                                              VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT;
 
 		debug_messenger_create_info.messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT |
-												  VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-												  VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+		                                          VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+		                                          VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
 
 		debug_messenger_create_info.pfnUserCallback = vk_debug_generic_callback;
 		debug_messenger_create_info.pUserData       = nullptr;        // Optional
@@ -647,12 +647,12 @@ class Instance : public VulkanObject<VkInstance>
 		VkInstanceCreateInfo instance_create_info    = {};
 		instance_create_info.sType                   = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 		instance_create_info.pNext                   = &debug_messenger_create_info;        // nullptr;
-		instance_create_info.flags                   = 0;
 		instance_create_info.pApplicationInfo        = &app_info;
 		instance_create_info.enabledLayerCount       = utl::static_cast_safe<uint32_t>(layers.size());
 		instance_create_info.ppEnabledLayerNames     = layers.data();
 		instance_create_info.enabledExtensionCount   = utl::static_cast_safe<uint32_t>(extensions.size());
 		instance_create_info.ppEnabledExtensionNames = extensions.data();
+		instance_create_info.flags                   = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
 
 		VkResult result{};
 		result = vkCreateInstance(&instance_create_info, cfg::VkAllocator, &instance_handle);
@@ -682,11 +682,11 @@ void Instance::temp()
 class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 {
   public:
-	FORCE_INLINE PhysicalDevice()                                  = delete;                    //! Copy constructor
-	FORCE_INLINE PhysicalDevice(const PhysicalDevice &a_other)     = default;                   //! Copy constructor
-	FORCE_INLINE PhysicalDevice(PhysicalDevice &&a_other) noexcept = default;                   //! Move constructor
-	FORCE_INLINE PhysicalDevice &operator=(const PhysicalDevice &a_other) = default;            //! Copy assignment operator
-	FORCE_INLINE PhysicalDevice &operator=(PhysicalDevice &&a_other) noexcept = default;        //! Move assignment operator
+	FORCE_INLINE                 PhysicalDevice()                                  = delete;         //! Copy constructor
+	FORCE_INLINE                 PhysicalDevice(const PhysicalDevice &a_other)     = default;        //! Copy constructor
+	FORCE_INLINE                 PhysicalDevice(PhysicalDevice &&a_other) noexcept = default;        //! Move constructor
+	FORCE_INLINE PhysicalDevice &operator=(const PhysicalDevice &a_other)          = default;        //! Copy assignment operator
+	FORCE_INLINE PhysicalDevice &operator=(PhysicalDevice &&a_other) noexcept      = default;        //! Move assignment operator
 	FORCE_INLINE virtual ~PhysicalDevice() noexcept override
 	{
 		this->cleanup();
@@ -718,7 +718,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	virtual void temp();
 
 	PhysicalDevice(VkInstance a_instance, void *a_window) :
-		m_instance(a_instance), m_window(a_window)
+	    m_instance(a_instance), m_window(a_window)
 	{
 		// Order of these calls is important, don't reorder
 		this->create_surface(this->m_window);
@@ -1059,7 +1059,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		for (const auto &available_format : surface_formats)
 		{
 			if (available_format.format == vkd::get_surface_format() &&
-				available_format.colorSpace == vkd::get_surface_colorspace())
+			    available_format.colorSpace == vkd::get_surface_colorspace())
 			{
 				surface_format = available_format;
 				surface_found  = true;
@@ -1260,7 +1260,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			VkDescriptorBufferInfo buffer_info{};
 			buffer_info.buffer = this->m_uniform_buffers[i];
 			buffer_info.offset = 0;
-			buffer_info.range  = VK_WHOLE_SIZE;        //sizeof(Uniforms);
+			buffer_info.range  = VK_WHOLE_SIZE;        // sizeof(Uniforms);
 
 			VkDescriptorImageInfo image_info{};
 			image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
@@ -1497,10 +1497,10 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		pipeline_color_blend_state_info.blendConstants[3]                   = 0.0f;
 
 		VkDynamicState dynamic_states[] = {
-			VK_DYNAMIC_STATE_VIEWPORT,
-			// VK_DYNAMIC_STATE_CULL_MODE_EXT,
-			// VK_DYNAMIC_STATE_FRONT_FACE_EXT,
-			VK_DYNAMIC_STATE_LINE_WIDTH};
+		    VK_DYNAMIC_STATE_VIEWPORT,
+		    // VK_DYNAMIC_STATE_CULL_MODE_EXT,
+		    // VK_DYNAMIC_STATE_FRONT_FACE_EXT,
+		    VK_DYNAMIC_STATE_LINE_WIDTH};
 
 		VkPipelineDynamicStateCreateInfo pipeline_dynamic_state_info = {};
 		pipeline_dynamic_state_info.sType                            = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
@@ -1606,16 +1606,16 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			vkCmdSetViewport(current_command_buffer, 0, 1, &viewport);
 
 			VkBuffer vertexBuffers[] = {this->m_vertex_buffers[0],
-										this->m_vertex_buffers[1],
-										this->m_vertex_buffers[1],
-										this->m_vertex_buffers[1],
-										this->m_vertex_buffers[1]};
+			                            this->m_vertex_buffers[1],
+			                            this->m_vertex_buffers[1],
+			                            this->m_vertex_buffers[1],
+			                            this->m_vertex_buffers[1]};
 
 			VkDeviceSize offsets[] = {astro_boy_positions_array_count * 0,
-									  astro_boy_normals_array_count * 0,                                                                                                                             // Normal offset
-									  astro_boy_normals_array_count * sizeof(float32_t),                                                                                                             // UV offset
-									  astro_boy_normals_array_count * sizeof(float32_t) + astro_boy_uvs_array_count * sizeof(float32_t),                                                             // Weight offset
-									  astro_boy_normals_array_count * sizeof(float32_t) + astro_boy_uvs_array_count * sizeof(float32_t) + astro_boy_weights_array_count * sizeof(float32_t)};        // JointID offset
+			                          astro_boy_normals_array_count * 0,                                                                                                                             // Normal offset
+			                          astro_boy_normals_array_count * sizeof(float32_t),                                                                                                             // UV offset
+			                          astro_boy_normals_array_count * sizeof(float32_t) + astro_boy_uvs_array_count * sizeof(float32_t),                                                             // Weight offset
+			                          astro_boy_normals_array_count * sizeof(float32_t) + astro_boy_uvs_array_count * sizeof(float32_t) + astro_boy_weights_array_count * sizeof(float32_t)};        // JointID offset
 
 			vkCmdBindVertexBuffers(current_command_buffer, 0, 5, vertexBuffers, offsets);
 
@@ -1646,7 +1646,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		color_attachment_description.stencilLoadOp           = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
 		color_attachment_description.stencilStoreOp          = VK_ATTACHMENT_STORE_OP_DONT_CARE;
 		color_attachment_description.initialLayout           = VK_IMAGE_LAYOUT_UNDEFINED;
-		color_attachment_description.finalLayout             = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;        //VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+		color_attachment_description.finalLayout             = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;        // VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
 
 		VkAttachmentReference color_attachment_reference = {};
 		color_attachment_reference.attachment            = 0;
@@ -2006,7 +2006,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 			}
 
 			vkCmdCopyBufferToImage(staging_command_buffer, a_source[i], a_destination[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-								   utl::static_cast_safe<uint32_t>(buffer_image_copy_regions.size()), buffer_image_copy_regions.data());
+			                       utl::static_cast_safe<uint32_t>(buffer_image_copy_regions.size()), buffer_image_copy_regions.data());
 		}
 
 		this->end_single_use_cmd_buffer(staging_command_buffer);
@@ -2089,7 +2089,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		}
 
 		this->m_astroboy_bbox.create_from_min_max(ror::Vector3f(astro_boy_bounding_box[0], astro_boy_bounding_box[1], astro_boy_bounding_box[2]),
-												  ror::Vector3f(astro_boy_bounding_box[3], astro_boy_bounding_box[4], astro_boy_bounding_box[5]));
+		                                          ror::Vector3f(astro_boy_bounding_box[3], astro_boy_bounding_box[4], astro_boy_bounding_box[5]));
 
 		ror::glfw_camera_visual_volume(this->m_astroboy_bbox.minimum(), this->m_astroboy_bbox.maximum());
 	}
@@ -2240,7 +2240,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	{
 		// Get color and depth sample count flags
 		VkSampleCountFlags counts = this->m_physical_device_properties.limits.framebufferColorSampleCounts &
-									this->m_physical_device_properties.limits.framebufferDepthSampleCounts;
+		                            this->m_physical_device_properties.limits.framebufferDepthSampleCounts;
 
 		VkSampleCountFlagBits required = static_cast<VkSampleCountFlagBits>(cfg::get_multisample_count());        // FIXME: Dangerous, if vulkan header changes or sample count isn't 2's power
 
@@ -2307,7 +2307,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		image_view_create_info.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
 		image_view_create_info.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
 
-		image_view_create_info.subresourceRange.aspectMask     = a_aspect_flags;        //VK_IMAGE_ASPECT_COLOR_BIT;
+		image_view_create_info.subresourceRange.aspectMask     = a_aspect_flags;        // VK_IMAGE_ASPECT_COLOR_BIT;
 		image_view_create_info.subresourceRange.baseMipLevel   = 0;
 		image_view_create_info.subresourceRange.levelCount     = a_mip_levels;
 		image_view_create_info.subresourceRange.baseArrayLayer = 0;
@@ -2362,7 +2362,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 		VkSampleCountFlagBits samples = this->get_sample_count();
 
 		this->m_msaa_color_image        = this->create_image(this->m_swapchain_extent.width, this->m_swapchain_extent.height, this->m_swapchain_format, VK_IMAGE_TILING_OPTIMAL,
-													  VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 1, samples);
+		                                                     VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, 1, samples);
 		this->m_msaa_color_image_memory = this->allocate_bind_image_memory(this->m_msaa_color_image, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 		this->m_msaa_color_image_view   = this->create_image_view(this->m_msaa_color_image, this->m_swapchain_format, VK_IMAGE_ASPECT_COLOR_BIT, 1);
 	}
@@ -2413,7 +2413,7 @@ class PhysicalDevice : public VulkanObject<VkPhysicalDevice>
 	std::vector<VkDescriptorSet> m_descriptor_sets{cfg::get_number_of_buffers()};
 	VkPipelineCache              m_pipeline_cache{nullptr};
 	VkRenderPass                 m_render_pass{nullptr};
-	void *                       m_window{nullptr};        // Window type that can be glfw or nullptr
+	void                        *m_window{nullptr};        // Window type that can be glfw or nullptr
 	VkCommandPool                m_graphics_command_pool{nullptr};
 	VkCommandPool                m_transfer_command_pool{nullptr};
 	VkSemaphore                  m_image_available_semaphore[cfg::get_number_of_buffers()];
@@ -2447,9 +2447,9 @@ void PhysicalDevice::temp()
 class Context
 {
   public:
-	FORCE_INLINE Context(const Context &a_other)     = default;                   //! Copy constructor
-	FORCE_INLINE Context(Context &&a_other) noexcept = default;                   //! Move constructor
-	FORCE_INLINE Context &operator=(const Context &a_other) = default;            //! Copy assignment operator
+	FORCE_INLINE          Context(const Context &a_other)       = default;        //! Copy constructor
+	FORCE_INLINE          Context(Context &&a_other) noexcept   = default;        //! Move constructor
+	FORCE_INLINE Context &operator=(const Context &a_other)     = default;        //! Copy assignment operator
 	FORCE_INLINE Context &operator=(Context &&a_other) noexcept = default;        //! Move assignment operator
 	FORCE_INLINE virtual ~Context() noexcept                    = default;        //! Destructor
 
